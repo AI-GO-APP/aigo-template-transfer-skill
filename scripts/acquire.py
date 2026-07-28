@@ -35,6 +35,25 @@ _LEGACY_API_RE = re.compile(
     r"|\b(?:submitRecord|listRecords|updateRecord|deleteRecord)\s*\(")
 
 
+def _clear_dir(path: Path, retries: int = 3) -> None:
+    """清空目錄但保留目錄本體。Windows 上索引器/防毒常短暫持有目錄 handle,
+    rmtree 連目錄一起刪會 WinError 32;只刪內容物 + 重試可避開。"""
+    import time
+    path.mkdir(parents=True, exist_ok=True)
+    for attempt in range(retries):
+        try:
+            for child in path.iterdir():
+                if child.is_dir():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+            return
+        except OSError:
+            if attempt == retries - 1:
+                raise
+            time.sleep(1.0)
+
+
 def fetch_app_vfs(env: dict, app_id: str) -> dict:
     """GET /api/v1/builder/apps/{app_id} → 完整 app_info(含 vfs_state)。"""
     try:
@@ -200,9 +219,7 @@ def main() -> None:
 
     template = work / "template"
     raw_dir = work / "raw"
-    if template.exists():
-        shutil.rmtree(template)
-    template.mkdir(parents=True)
+    _clear_dir(template)
     raw_dir.mkdir(exist_ok=True)
 
     profiles_cfg = common.load_config("layout_profiles.json")

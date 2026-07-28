@@ -4,6 +4,19 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.3.1
+
+白老鼠實測(FDE-URfit-FDE-task-manager,S0→S8 於正式平台全程通過)中的修正:
+
+- `normalize_meta.py` 新增 `--data-references <json>`:SaaS 表(Data Reference 軌)
+  的模板必須宣告 `data_references_schema`,平台 preflight 會驗表與欄位存在。
+- `acquire.py` 目錄清理改 `_clear_dir`(只清內容+重試,不刪目錄本體):
+  Windows 索引器/防毒短暫持有目錄 handle 時 rmtree 會 WinError 32。
+
+已知待補(記錄於 session):audit 失敗項(emoji/devDependencies)目前走「回源修正
++ reset 重跑」,尚無 decisions 軌;掃描器 app_domain 規則吃不到大寫常數
+(`export const APP_DOMAIN = ...`)。
+
 ## 0.3.0
 
 同步 ai-go-developer 平台 2026-07-28 合入 main 的變更(PR #20–#32):

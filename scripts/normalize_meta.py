@@ -97,6 +97,8 @@ def main() -> None:
     parser.add_argument("--version", default=None)
     parser.add_argument("--tags", help="逗號分隔(S7 會對平台 /refs/tags 驗證)")
     parser.add_argument("--setup-schema", help="setup_schema JSON 檔路徑")
+    parser.add_argument("--data-references", help="data_references_schema JSON 檔路徑"
+                        "([{table_name, columns[], permissions[]}],SaaS 表 Data Reference 軌)")
     args = parser.parse_args()
 
     work = common.work_dir(args.slug)
@@ -137,6 +139,8 @@ def main() -> None:
         meta["tags"] = [t.strip() for t in args.tags.split(",") if t.strip()]
     if args.setup_schema:
         meta["setup_schema"] = common.load_json(Path(args.setup_schema))
+    if args.data_references:
+        meta["data_references_schema"] = common.load_json(Path(args.data_references))
 
     # 3. 固定欄位與預設
     meta["slug"] = args.slug
