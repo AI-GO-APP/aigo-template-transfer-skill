@@ -1,0 +1,17 @@
+# 認證與秘密 — 絕不入版控
+.env
+.devportal/
+.aigo/
+
+# 轉換工作區(每支 app 的抽取產物、掃描報告、裁決紀錄)
+work/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# 編輯器
+.idea/
+.vscode/

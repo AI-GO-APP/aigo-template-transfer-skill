@@ -1,0 +1,49 @@
+{
+  "comment": "S6 本地 audit 規則。前四類 vendored 自 ai-go-templates/.agent/skills/template-audit/config/audit_rules.json(2026-07-28),其後為本 skill 新增閘。",
+  "forbidden_strings": {
+    "enabled": true,
+    "description": "掃描所有程式碼檔案,確認不含有任何禁止字串",
+    "patterns": ["playground-super-admin", "TODO_REMOVE", "FIXME_BEFORE_RELEASE"],
+    "exclude_files": ["audit_rules.json"]
+  },
+  "emoji_check": {
+    "enabled": true,
+    "description": "前端 .tsx 檔案中嚴禁使用任何 Emoji 符號",
+    "target_extensions": [".tsx"],
+    "allowed_symbols": ["DEGREE"]
+  },
+  "action_structure": {
+    "enabled": true,
+    "description": "檢查 Action Python 檔案的結構合規性",
+    "require_execute_ctx": true,
+    "require_ctx_secrets": false,
+    "forbid_hardcoded_keys": true,
+    "forbid_connector_imports": ["connector_engine", "unified_proxy", "connectors", "adapters"]
+  },
+  "meta_integrity": {
+    "enabled": true,
+    "description": "檢查 _template_meta.json 的完整性",
+    "required_meta_fields": ["slug", "name", "description", "category", "version"]
+  },
+  "shape": {
+    "enabled": true,
+    "description": "VFS 形狀:entry、SDK 三檔、package.json 核心依賴、INJ 檔必須為空殼",
+    "core_dependencies": ["react", "react-dom", "react-router-dom", "lucide-react", "react-hot-toast"],
+    "import_map_packages": ["react", "react-dom", "lucide-react", "react-router-dom", "react-hot-toast"],
+    "empty_stub_files": ["src/data.json", "src/db.json"],
+    "forbidden_files": ["src/actions.json"]
+  },
+  "limits": {
+    "enabled": true,
+    "description": "AI GO VFS 上限 200 檔/單檔 1MB(warn 在 150);Developer 上限 500 檔/50MB",
+    "max_files_fail": 200,
+    "max_files_warn": 150,
+    "max_file_bytes": 1000000
+  },
+  "legacy": {
+    "enabled": true,
+    "description": "舊制 CustomObject 一律禁止:meta 不得含 custom_objects_schema,action 不得用 *_object API",
+    "forbid_meta_keys": ["custom_objects_schema"],
+    "forbid_patterns": ["ctx\\.db\\.(query_object|insert_object|update_object|remove_object|list_custom_objects)\\b"]
+  }
+}

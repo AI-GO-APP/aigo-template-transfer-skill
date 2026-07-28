@@ -1,0 +1,14 @@
+{
+  "comment": "B 層佈局偵測規則。依 order 逐一嘗試:vfs_root 下必須存在 entry_markers 之一才算命中。multi=true 表示 vfs_root 下是多支 app 子目錄,必須以 --vfs-subdir 指定。全部不中時,以 --mapping <json> 提供自訂對映。",
+  "entry_markers": ["src/main.tsx", "src/App.tsx"],
+  "profiles": [
+    { "name": "root",     "vfs_root": ".",        "multi": false },
+    { "name": "app",      "vfs_root": "app",      "multi": false },
+    { "name": "aigo",     "vfs_root": "aigo",     "multi": false },
+    { "name": "aigo-app", "vfs_root": "aigo-app", "multi": false },
+    { "name": "vfs",      "vfs_root": "vfs",      "multi": false },
+    { "name": "vfs-multi", "vfs_root": "vfs",     "multi": true }
+  ],
+  "meta_candidates": ["_template_meta.json", "_template.json"],
+  "exclude_dirs": ["node_modules", ".git", "__pycache__", ".venv", "dist", "build"]
+}

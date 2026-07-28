@@ -1,0 +1,11 @@
+[project]
+name = "aigo-template-transfer-skill"
+version = "0.1.0"
+description = "把 AI GO custom app 轉化為 template,並直接在 AI GO Developer 平台建立草稿與跑端到端測試的 skill"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27",
+]
+
+[tool.uv]
+dev-dependencies = []
