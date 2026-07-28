@@ -69,7 +69,7 @@ python scripts/devportal.py whoami
 先盤點,再讓用戶拍板:
 
 1. 檢視來源 app 的功能與規模(actions 數、頁面數、自建表)。
-2. 對照既有模板是否重疊:`ai-go-templates/templates/` 與平台 `GET /live-templates`。
+2. 對照既有模板是否重疊:平台 `GET /live-templates`(架上清單即唯一權威)。
 3. 向用戶呈報三選一建議(新開 new / 併入既有 merge / 排除 exclude)與理由,由用戶執行:
 
 ```bash

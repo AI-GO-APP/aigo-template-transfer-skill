@@ -4,6 +4,12 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.3.2
+
+- ai-go-templates 已棄用:移除 SKILL.md 候選判定與 README 相關系統中指向該 repo 的
+  操作性引用(候選重疊判定改以平台 `GET /live-templates` 為唯一權威);
+  vendor 檔頭與 PLAN/CHANGELOG 的歷史出處註記保留。
+
 ## 0.3.1
 
 白老鼠實測(FDE-URfit-FDE-task-manager,S0→S8 於正式平台全程通過)中的修正:

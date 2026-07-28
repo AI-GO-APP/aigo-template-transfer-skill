@@ -71,8 +71,8 @@ python -m unittest discover -s tests -v
 
 ## 相關系統
 
-- [ai-go-templates](https://github.com/AI-GO-APP/ai-go-templates):模板 repo 與
-  template-develop/deploy/audit skills(本 skill vendor 其 audit 四閘)
-- ai-go-developer:Developer 平台(本 skill 的發布目的地)
-- ai-go:AI GO 本體(來源 app 與 Data Center;`data_center_schema` 權威 parser 所在,
-  以 `--ai-go-backend` 指向可做真驗證)
+- [aigo-app-builder-skill](https://github.com/AI-GO-APP/aigo-app-builder-skill):
+  custom app 開發 skill(本 skill 的憑證紀律、盤點面與驗證慣例與其對齊)
+- ai-go-developer:Developer 平台(本 skill 的發布目的地;
+  `--ai-go-backend` 指向其 repo 可用 ctx-core 的權威 DSL parser 做真驗證)
+- ai-go:AI GO 本體(來源 app 與 Data Center)
