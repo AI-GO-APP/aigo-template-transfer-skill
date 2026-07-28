@@ -4,6 +4,25 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.3.0
+
+同步 ai-go-developer 平台 2026-07-28 合入 main 的變更(PR #20–#32):
+
+- **送審門檻更新**:每支 enabled action 必須在最後 deploy 後於沙箱成功跑過
+  (伺服器自動記 test 事件,前端不可宣稱)。e2e full 檔新增 `submit-gate` 試算,
+  列出會被平台擋下的 action;`--expect allow_fail` 明確標注擋不住平台端。
+- **`required_egress` 宣告鏈**:inventory 新增 `egress_slugs` 盤點
+  (`ctx.http.call/fetch` 的 service slug);normalize_meta 自動宣告進 metadata;
+  devportal push 白名單加入該欄位;e2e 新增沙箱 egress 註冊 phase(`--egress-file`,
+  支援 `allow_dynamic_host`)。
+- **`actions/_shared/` 共用模組豁免**(issue #497):audit 不再要求 `execute(ctx)`
+  與 sync_ 慣例(硬編碼金鑰/禁止 import 檢查仍適用)。
+- **權威 DSL 驗證改首選 ai-go-developer 的 ctx-core**(`ctx_core.template_dsl`,
+  零相依;與平台「metadata 存檔即驗」同一套),ai-go 後端降為次選。
+- e2e 跳過 manifest `is_enabled:false` 的 action(沙箱執行會 409,且不列入送審門檻)。
+- 文件同步:devportal-api.md(送審門檻、required_egress、_shared、沙箱自動記錄、
+  editor 權限、release-tag 部署節奏)、template-contract.md、troubleshooting.md 新增三條。
+
 ## 0.2.0
 
 對齊 aigo-app-builder-skill v1.1.1 的結構與嚴謹機制:

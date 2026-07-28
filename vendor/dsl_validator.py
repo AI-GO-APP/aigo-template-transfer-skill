@@ -169,25 +169,42 @@ def validate_data_center_schema(raw: Any) -> list[str]:
 
 
 def validate_with_backend(raw: Any, backend_path: str) -> list[str] | None:
-    """以 ai-go 後端的權威 parser 驗證。成功回傳錯誤列表(空=通過);
-    後端 import 不到時回傳 None(呼叫端應降級用本地驗證並警告)。"""
+    """以權威 parser 驗證。backend_path 可指向:
+    - ai-go-developer repo(用 packages/ctx-core 的 ctx_core.template_dsl,零相依,**首選**
+      ——PUT metadata 存檔即驗跑的就是這一套)
+    - ai-go repo(app.services.data_center.template_dsl,需該 repo 相依套件如 sqlalchemy)
+    成功回傳錯誤列表(空=通過);import 不到時回傳 None(呼叫端降級本地驗證並警告)。"""
     import sys
     from pathlib import Path
 
     backend = Path(backend_path)
-    candidates = [backend, backend / "backend"]
-    for cand in candidates:
+
+    # 首選:ai-go-developer 的 ctx-core(零相依)
+    for cand in (backend / "packages" / "ctx-core", backend):
+        if (cand / "ctx_core" / "template_dsl.py").exists():
+            sys.path.insert(0, str(cand))
+            try:
+                from ctx_core.template_dsl import (  # type: ignore
+                    TemplateSchemaError, order_tables, parse_data_center_schema)
+                try:
+                    order_tables(parse_data_center_schema(raw))
+                    return []
+                except TemplateSchemaError as e:
+                    return [str(e)]
+            except ImportError:
+                return None
+            finally:
+                sys.path.remove(str(cand))
+
+    # 次選:ai-go 後端(需其相依套件)
+    for cand in (backend, backend / "backend"):
         if (cand / "app" / "services" / "data_center" / "template_dsl.py").exists():
             sys.path.insert(0, str(cand))
             try:
                 from app.services.data_center.template_dsl import (  # type: ignore
-                    TemplateSchemaError,
-                    order_tables,
-                    parse_data_center_schema,
-                )
+                    TemplateSchemaError, order_tables, parse_data_center_schema)
                 try:
-                    tables = parse_data_center_schema(raw)
-                    order_tables(tables)
+                    order_tables(parse_data_center_schema(raw))
                     return []
                 except TemplateSchemaError as e:
                     return [str(e)]

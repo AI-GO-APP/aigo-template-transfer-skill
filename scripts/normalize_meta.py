@@ -21,7 +21,8 @@ import common
 # 舊 meta 可繼承的欄位(與 Developer 平台 metadata 語義對齊)
 INHERIT_KEYS = [
     "name", "description", "long_description", "icon_emoji", "category",
-    "tags", "access_mode", "setup_schema", "data_references_schema", "author", "version",
+    "tags", "access_mode", "setup_schema", "required_egress",
+    "data_references_schema", "author", "version",
 ]
 CATEGORIES = {
     "starter", "messaging", "crm", "catering", "integration",
@@ -150,6 +151,19 @@ def main() -> None:
             meta["data_center_schema"] = schema
         else:
             meta.pop("data_center_schema", None)
+
+    # 4.4 required_egress 宣告:模板保留 ctx.http.call(slug) 時,slug 必須宣告,
+    # 否則租戶安裝時不會被提示授權外部服務,裝了也跑不動(平台 preflight 會 warn)。
+    # 以去租戶化後的當前內容重盤(S1 快照可能已過時)。
+    inv = refresh_inventory(work, template)
+    slugs = inv.get("egress_slugs", [])
+    if slugs:
+        declared = meta.get("required_egress") or {}
+        for slug in slugs:
+            declared.setdefault(slug, {})
+        meta["required_egress"] = declared
+        print(f"[NOTE] required_egress 已宣告:{', '.join(sorted(declared))}"
+              f"(建議補 label/description 供安裝表單顯示)")
 
     # 4.5 安裝後設定清單:webhook/排程/Egress 不隨模板走,必須明白告知安裝租戶
     checklist = build_post_install_checklist(work, meta)

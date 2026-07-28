@@ -15,6 +15,8 @@ src/db.json                  [INJ] 一律空殼 {}(actions.json 不落地)
 src/components/  src/pages/(_manifest.json)
 actions/manifest.json        扁平 {action_name: {description, timeout_ms, is_enabled}}
 actions/<name>.py            檔名 = action 名;唯一入口 def execute(ctx)
+actions/_shared/**.py        共用模組(選用):被 action import,不要求 execute(ctx),
+                             不可當 action 呼叫;沙箱/runner 自動隨行注入
 actions/seed_demo_data.py    業務型模板慣例(冪等、繁中在地化、timeout_ms 30000)
 ```
 
@@ -25,7 +27,10 @@ VFS 上限(AI GO 側):200 檔、單檔 1MB。
 
 必填(audit 硬閘):`slug, name, description, category, version`
 選填:`long_description, icon_emoji, access_mode, tags, setup_schema,
-data_center_schema, data_references_schema, author`
+required_egress, data_center_schema, data_references_schema, author`
+
+- `required_egress`:`{slug: {label?, description?}}`——模板保留 `ctx.http.call(slug)`
+  時必須宣告(normalize_meta 會自動從盤點補上),租戶安裝時據此提示授權外部服務。
 
 - category ∈ starter|messaging|crm|catering|integration|ai|operations|productivity|analytics
 - access_mode ∈ internal|external|self_built

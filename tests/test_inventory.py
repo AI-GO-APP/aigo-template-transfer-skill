@@ -40,7 +40,14 @@ class TestInventory(unittest.TestCase):
         inv = build_inventory(self.template, {}, None)
         self.assertEqual(inv["webhooks"], [])
         self.assertEqual(inv["egress_domains"], [])
+        self.assertEqual(inv["egress_slugs"], [])
         self.assertEqual(inv["legacy_usage"], [])
+
+    def test_egress_slug_captured(self):
+        (self.template / "actions" / "call_ext.py").write_text(
+            'def execute(ctx):\n    ctx.http.call("twse-mops", "/api/x")\n', encoding="utf-8")
+        inv = build_inventory(self.template, {}, None)
+        self.assertEqual(inv["egress_slugs"], ["twse-mops"])
 
 
 class TestPostInstallChecklist(unittest.TestCase):

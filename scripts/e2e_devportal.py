@@ -12,8 +12,14 @@
 - full(預設):quick + 全部 action 執行 + seed_demo_data 冪等重跑 + test 事件。
   送審(S9)一律要求最後一次 e2e 是 full。
 
+送審門檻(2026-07-28 平台更新):最後 deploy 後需 (a) 一筆預覽型 test 事件,
+且 (b) **每支 enabled action 至少一筆 status=success 的沙箱執行紀錄**——由沙箱
+執行端點伺服器自動記錄,前端不可宣稱。full 檔跑過所有 action 即同時滿足;
+沒跑通的 action 只能補憑證重跑或 manifest 停用,--expect allow_fail 擋不住平台端。
+
 判讀規則:
 - runner 未配置(503)→ 該 phase 記 SKIP,不視為失敗,但會標注在報告
+  (注意:runner 不可用時 enabled action 無 success 紀錄,送審會被平台 422)
 - 回應含 approval_status=="pending" / 簽核例外 → 記 WARN 不記 FAIL:
   那是租戶簽核流程攔截(builder 核心規則 24),不是 bug,且**不可重試**
 - --expect 檔可宣告允許失敗的 action(如需要真實第三方憑證者)→ 記 WARN
@@ -44,6 +50,8 @@ def main() -> None:
     parser.add_argument("--quick", action="store_true",
                         help="快速檔:preflight+secrets+CRUD,不跑 action、不記 test 事件")
     parser.add_argument("--secrets-file", help="e2e 用 secrets 值 JSON({KEY: value})")
+    parser.add_argument("--egress-file",
+                        help="沙箱 egress 設定 JSON({slug: {base_url, auth_type, auth_config, allow_dynamic_host}})")
     parser.add_argument("--expect", help="期望設定 JSON({allow_fail_actions: [..]})")
     parser.add_argument("--no-event", action="store_true",
                         help="不自動記 test 事件(改走瀏覽器 preview)")
@@ -105,6 +113,27 @@ def main() -> None:
     else:
         run_phase(report, "secrets", "skip", "setup_schema 為空")
 
+    # Phase 2.5: 沙箱 egress 註冊(required_egress 宣告的 slug 沒註冊,action 測不動;
+    # 平台 preflight 也會 warn「缺沙箱註冊」)
+    required_egress = meta.get("required_egress") or {}
+    egress_values = common.load_json(Path(args.egress_file)) if args.egress_file else {}
+    for slug in required_egress:
+        cfg = egress_values.get(slug, {})
+        body = {
+            "base_url": cfg.get("base_url", "https://example.invalid"),
+            "auth_type": cfg.get("auth_type", "none"),
+            "auth_config": cfg.get("auth_config", {}),
+            "is_active": True,
+            "allow_dynamic_host": bool(cfg.get("allow_dynamic_host", False)),
+        }
+        status, resp = api(env, "PUT", f"/sandbox/v/{vid}/egress/{slug}", body=body)
+        if status == 200:
+            note = "真值" if slug in egress_values else "dummy base_url(該 slug 的 action 預期打不通)"
+            run_phase(report, f"egress:{slug}", "pass", note)
+        else:
+            run_phase(report, f"egress:{slug}", "fail", f"HTTP {status}:{resp}")
+            hard_fail = True
+
     # Phase 3: 表 CRUD(經 sandbox ext proxy;internal 亦可用 proxy/{app_id} 形式)
     tables = (meta.get("data_center_schema") or {}).get("tables", [])
     for table in tables:
@@ -141,14 +170,23 @@ def main() -> None:
     actions_dir = template / "actions"
     manifest_path = actions_dir / "manifest.json"
     action_names: list[str] = []
+    disabled: list[str] = []
     if args.quick:
         run_phase(report, "actions", "skip", "--quick 檔不跑 action;送審前需跑 full")
     elif manifest_path.exists():
         manifest = common.load_json(manifest_path)
+        entries: dict = {}
         if isinstance(manifest, dict):
-            action_names = [n for n in manifest.keys() if n != "actions"]
+            entries = {n: c for n, c in manifest.items() if n != "actions"}
         elif isinstance(manifest, list):
-            action_names = [e.get("name") for e in manifest if isinstance(e, dict)]
+            entries = {e.get("name"): e for e in manifest if isinstance(e, dict) and e.get("name")}
+        for name, cfg in entries.items():
+            # is_enabled:false 的 action 沙箱執行回 409,且不列入送審門檻——直接跳過
+            if isinstance(cfg, dict) and cfg.get("is_enabled") is False:
+                disabled.append(name)
+                run_phase(report, f"action:{name}", "skip", "manifest 已停用(不列入送審門檻)")
+                continue
+            action_names.append(name)
 
     def run_action(name: str) -> tuple[int, dict]:
         if access_mode == "external":
@@ -184,6 +222,19 @@ def main() -> None:
         else:
             run_phase(report, f"action:{name}{tag}", "fail", f"HTTP {status}:{str(resp)[:200]}")
             hard_fail = True
+
+    # Phase 4.5: 送審門檻試算——平台要求每支 enabled action 在最後 deploy 後
+    # 至少一筆 status=success 的沙箱執行紀錄(伺服器自動記,前端不可宣稱)。
+    # 沒跑通的 enabled action = 送審必被 422;唯二出路:補真憑證跑通,或 manifest 停用。
+    not_passed = [r["phase"].split(":", 1)[1].replace("(webhook)", "")
+                  for r in report
+                  if r["phase"].startswith("action:") and "冪等" not in r["phase"]
+                  and r["status"] != "pass"
+                  and r["phase"].split(":", 1)[1].replace("(webhook)", "") not in disabled]
+    if not_passed and not args.quick:
+        run_phase(report, "submit-gate", "warn",
+                  f"這些 enabled action 未成功執行,送審會被平台擋下:{', '.join(not_passed)}"
+                  f"——補真憑證重跑,或在 manifest 設 is_enabled:false 停用")
 
     # Phase 5: 表列筆數(資訊性)
     status, counts = api(env, "GET", f"/sandbox/v/{vid}/tables")

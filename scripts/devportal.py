@@ -114,8 +114,8 @@ def collect_files(template: Path) -> list[dict]:
 
 def build_metadata(meta: dict) -> dict:
     keys = ["name", "description", "long_description", "icon_emoji", "category", "tags",
-            "access_mode", "setup_schema", "data_center_schema", "data_references_schema",
-            "author", "version"]
+            "access_mode", "setup_schema", "required_egress", "data_center_schema",
+            "data_references_schema", "author", "version"]
     return {k: meta[k] for k in keys if meta.get(k) is not None and meta.get(k) != ""}
 
 

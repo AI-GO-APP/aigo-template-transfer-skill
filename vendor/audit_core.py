@@ -136,6 +136,9 @@ def audit_action_structure(template_dir: Path, rule: dict) -> list[str]:
 
     for py_file in sorted(actions_dir.rglob("*.py")):
         rel = py_file.relative_to(template_dir)
+        # actions/_shared/**.py 是共用模組(issue #497,平台 preflight 明文豁免):
+        # 不要求 execute(ctx) 與 sync_ 慣例;硬編碼金鑰/禁止 import 檢查仍適用。
+        is_shared = rel.as_posix().startswith("actions/_shared/")
         try:
             content = py_file.read_text(encoding="utf-8")
             lines = content.splitlines()
@@ -143,12 +146,12 @@ def audit_action_structure(template_dir: Path, rule: dict) -> list[str]:
             failures.append(f"({rel}): 無法讀取檔案")
             continue
 
-        if require_execute_ctx:
+        if require_execute_ctx and not is_shared:
             has_execute = any(re.search(r"def\s+execute\s*\(\s*ctx\b", line) for line in lines)
             if not has_execute:
                 failures.append(f"({rel}): 缺少 def execute(ctx) 定義")
 
-        if require_ctx_secrets:
+        if require_ctx_secrets and not is_shared:
             if "ctx.secrets.get" not in content and any("def execute" in line for line in lines):
                 failures.append(f"({rel}): 未使用 ctx.secrets.get 管理金鑰")
 
@@ -162,7 +165,7 @@ def audit_action_structure(template_dir: Path, rule: dict) -> list[str]:
                 if re.search(rf"\b(?:import\s+{mod}|from\s+{mod}\b)", line):
                     failures.append(f"第 {line_no} 行 ({rel}): 禁止 import '{mod}'")
 
-        if py_file.stem.startswith("sync_"):
+        if py_file.stem.startswith("sync_") and not is_shared:
             if not re.search(r"ctx\.db\.(insert|update)", content):
                 failures.append(f"({rel}): sync_ 檔案應使用 ctx.db.insert 或 ctx.db.update")
     return failures

@@ -29,6 +29,7 @@ import aigo_client
 import common
 
 _URL_RE = re.compile(r"https?://([A-Za-z0-9.\-]+)")
+_EGRESS_SLUG_RE = re.compile(r"ctx\.http\.(?:call|fetch)\s*\(\s*['\"]([^'\"\n]+)['\"]")
 _LEGACY_API_RE = re.compile(
     r"ctx\.db\.(?:query_object|insert_object|update_object|remove_object|list_custom_objects)"
     r"|\b(?:submitRecord|listRecords|updateRecord|deleteRecord)\s*\(")
@@ -49,8 +50,8 @@ def build_inventory(template: Path, env: dict, app_id: str | None) -> dict:
     """盤點不隨 VFS 走的 app/租戶級資源:webhook 宣告、對外網域、排程、legacy 痕跡。
 
     對齊 builder skill Phase 0 步驟 5/7/8——這些不盤,轉出來的模板會默默丟能力。"""
-    inventory: dict = {"webhooks": [], "egress_domains": [], "crons": [],
-                       "crons_note": "", "legacy_usage": []}
+    inventory: dict = {"webhooks": [], "egress_domains": [], "egress_slugs": [],
+                       "crons": [], "crons_note": "", "legacy_usage": []}
 
     manifest_path = template / "actions" / "manifest.json"
     if manifest_path.exists():
@@ -67,12 +68,14 @@ def build_inventory(template: Path, env: dict, app_id: str | None) -> dict:
             pass
 
     domains: set[str] = set()
+    slugs: set[str] = set()
     actions_dir = template / "actions"
     if actions_dir.is_dir():
         for py in actions_dir.rglob("*.py"):
             text = py.read_text(encoding="utf-8", errors="replace")
             domains |= {d for d in _URL_RE.findall(text)
                         if d not in ("localhost", "127.0.0.1")}
+            slugs |= set(_EGRESS_SLUG_RE.findall(text))
             for m in _LEGACY_API_RE.finditer(text):
                 inventory["legacy_usage"].append(
                     f"{py.relative_to(template).as_posix()}: {m.group(0)}")
@@ -82,6 +85,7 @@ def build_inventory(template: Path, env: dict, app_id: str | None) -> dict:
                 inventory["legacy_usage"].append(
                     f"{ts.relative_to(template).as_posix()}: {m.group(0)}")
     inventory["egress_domains"] = sorted(domains)
+    inventory["egress_slugs"] = sorted(slugs)
 
     if app_id:
         try:

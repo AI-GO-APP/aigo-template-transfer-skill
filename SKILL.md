@@ -190,6 +190,13 @@ python scripts/normalize_meta.py --slug <slug> --name "<名稱>" --category <cat
 python scripts/audit_local.py --slug <slug> [--ai-go-backend <path>]
 ```
 
+- normalize_meta 會以最終內容重盤 inventory:自動生成「安裝後設定清單」入
+  long_description,並把殘留的 `ctx.http.call(slug)` 自動宣告進 `required_egress`
+  (缺宣告 = 租戶安裝不被提示授權,裝了也跑不動)。
+- `--ai-go-backend` 建議指向 **ai-go-developer** repo(ctx-core 的 DSL parser 零相依,
+  且與平台「存檔即驗」跑的是同一套);指向 ai-go 亦可(需該 repo 相依套件)。
+- `actions/_shared/**.py` 共用模組不要求 `execute(ctx)`(audit 已豁免)。
+
 全數 PASS 才過。失敗項若需改 code:回 Phase 3 補裁決(`reset --from-stage S2` 後重跑),
 不要手改。
 
@@ -216,7 +223,15 @@ python scripts/e2e_devportal.py --slug <slug> --quick      # 快速檔(迭代中
 | 檔位 | 內容 | 用途 |
 |---|---|---|
 | `--quick` | preflight + 沙箱 secrets + 每張表 CRUD | 只改文案/CSS 後的快速重驗;不記 test 事件、不推進狀態機 |
-| full(預設) | quick + 全部 action 執行 + `seed_demo_data` 冪等重跑 + test 事件 | **送審前必須**;S9 會檢查最後一次 e2e 是 full |
+| full(預設) | quick + 沙箱 egress 註冊 + 全部 enabled action 執行 + `seed_demo_data` 冪等重跑 + test 事件 | **送審前必須**;S9 會檢查最後一次 e2e 是 full |
+
+**送審門檻(平台 2026-07-28 更新)**:每支 enabled action 必須在最後 deploy 後
+於沙箱**成功跑過一次**——執行紀錄由伺服器自動記,前端不可宣稱。這代表:
+- `--expect allow_fail_actions` 只影響本地報告判讀,**擋不住平台端**;
+  真跑不通的 action 只有兩條路:補真憑證(`--secrets-file`/`--egress-file`)重跑,
+  或 manifest 設 `is_enabled:false` 停用後重新 push。
+- e2e 報告的 `submit-gate` 條目會列出會被擋的 action,向用戶摘報時務必帶到。
+- prod 部署改由 release tag 觸發,線上平台可能尚未套用此門檻——以實際送審回應為準。
 
 判讀規則(寫進報告,向用戶摘報時逐條說明):
 - 需要真實第三方憑證的 action:向用戶要 e2e 測試值(`--secrets-file`),

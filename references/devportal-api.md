@@ -28,17 +28,28 @@ Base:`https://developer.ai-go.app/api/v1`。權威清單:`GET /dev-docs/endpoint
 注意:
 - 建模組後**不要** `POST /versions`——存在進行中版本線(draft/rejected/submitted)會 409。
 - 版本狀態機:draft → submitted → approved/rejected;approved 後舊版 superseded。
-- 送審門檻:preflight ok + ≥1 筆 deploy 事件 + 最後 test 事件不早於最後 deploy。
+- **送審門檻(2026-07-28 更新)**:preflight ok + ≥1 筆 deploy 事件 + 最後 deploy 之後:
+  (a) 一筆**無 detail.action** 的 test 事件(預覽測試,可手動 POST);
+  (b) **每支 enabled action**(排除 `actions/_shared/`、扣 manifest `is_enabled:false`)
+  至少一筆 `detail.status=="success"` 的 test 事件——由沙箱執行端點**伺服器自動記錄**,
+  手動 POST 宣稱無效。跑不通的 action 只能補憑證跑通或停用。
+- `actions/_shared/**.py` 是共用模組(issue #497):不要求 `execute(ctx)`,
+  沙箱執行時自動隨行注入 runner;不可當 action 呼叫。
 - 限制:MAX_FILES=500、50MB;路徑不得含 `\` 或 `..`;slug `^[a-z0-9][a-z0-9_-]*$`(底線正規化為 `-`)。
+- **部署節奏**:CI 改由 release tag 觸發部署 prod——developer.ai-go.app 可能落後 main;
+  skill 應容忍新舊兩種送審門檻行為。
 
 ## metadata 欄位
 
 `name, description, long_description, icon_emoji, category, tags, access_mode,
-vfs_factory_key, setup_schema, data_center_schema, data_references_schema, author, version`
+vfs_factory_key, setup_schema, required_egress, data_center_schema,
+data_references_schema, author, version`
 
 - `custom_objects_schema` 非空會被 422 明確擋下(舊制退場)。
-- `data_center_schema` **可以**存(validate_metadata 無 key 白名單;adopt 流程的
-  `_ADOPT_METADATA_KEYS` 也包含它)。
+- `data_center_schema`:可存,且**存檔即驗**(`ctx_core.template_dsl`,與 AI GO
+  upsert 同一套含成環偵測;不合法 PUT metadata 直接 422)。
+- `required_egress`:`{slug: {label?, description?}}`——模板用到 `ctx.http.call(slug)`
+  時必須宣告,租戶安裝時據此提示授權外部服務;preflight 會對比程式碼掃描結果(warn)。
 - `category` 白名單 9 值;`tags` 必須取自 `GET /refs/tags`。
 - `setup_schema`:`{KEY: {type: text|secret|select, label, required?, options?}}`。
 
@@ -49,9 +60,12 @@ vfs_factory_key, setup_schema, data_center_schema, data_references_schema, autho
 | `GET /sandbox/v/{vid}/tables` | 各表筆數 |
 | `POST /sandbox/v/{vid}/tables/{table}/seed?count=N` | 灌假資料 |
 | `GET/PUT /sandbox/v/{vid}/secrets` | 沙箱金鑰 |
-| `GET/PUT/DELETE /sandbox/v/{vid}/egress[/{slug}]` | 沙箱 egress |
-| `POST /sandbox/v/{vid}/actions/apps/{app_id}/run/{name}` | 跑 action(internal);runner 未配置回 503 |
-| `POST /sandbox/v/{vid}/ext/actions/run/{name}` | 跑 action(external) |
+| `GET/PUT/DELETE /sandbox/v/{vid}/egress[/{slug}]` | 沙箱 egress;PUT body 支援 `allow_dynamic_host`(wildcard,`ctx.http.fetch` 用) |
+| `POST /sandbox/v/{vid}/actions/apps/{app_id}/run/{name}` | 跑 action(internal);runner 未配置回 503;`is_enabled:false` 回 409;**執行結果由伺服器記成 test 事件(detail.action/status)** |
+| `POST /sandbox/v/{vid}/ext/actions/run/{name}` | 跑 action(external);同上自動記錄 |
+
+沙箱**寫入**與 test 事件回報需 `editor`(read_only 只能看)。新版 data_table SDK
+(自建表)沙箱已支援;沙箱與 AI GO prod 的已知行為差距已於 2026-07-28 收斂(PR #30)。
 | `POST/GET /sandbox/v/{vid}/proxy/{app_id}/{table}` | SDK 相容 CRUD(internal) |
 | `POST/GET /sandbox/v/{vid}/ext/proxy/{table}` | SDK 相容 CRUD(external) |
 

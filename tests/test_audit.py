@@ -50,6 +50,22 @@ class TestAudit(unittest.TestCase):
         failures = audit_shape(self.template, self.rules["shape"])
         self.assertTrue(any("axios" in f for f in failures))
 
+    def test_shared_module_exempt_from_execute(self):
+        shared = self.template / "actions" / "_shared"
+        shared.mkdir()
+        (shared / "money.py").write_text(
+            "def fmt(n):\n    return f'{n:,.0f}'\n", encoding="utf-8")
+        results = run_audit(self.template, self.rules)
+        self.assertEqual(results["Action 結構"], [])
+
+    def test_shared_module_still_checked_for_hardcoded_keys(self):
+        shared = self.template / "actions" / "_shared"
+        shared.mkdir()
+        (shared / "cfg.py").write_text(
+            'api_key = "sk_live_abcdef1234"\n', encoding="utf-8")
+        results = run_audit(self.template, self.rules)
+        self.assertTrue(any("硬編碼" in f for f in results["Action 結構"]))
+
     def test_manifest_mismatch(self):
         (self.template / "actions" / "orphan.py").write_text(
             "def execute(ctx):\n    return None\n", encoding="utf-8")
