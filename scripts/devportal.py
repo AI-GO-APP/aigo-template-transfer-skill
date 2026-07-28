@@ -27,9 +27,12 @@ ENV_TEMPLATE = """# Developer 平台(本檔已被 .gitignore,不會進版控)
 DEVPORTAL_API=https://developer.ai-go.app/api/v1
 DEVPORTAL_PAT=
 
-# 來源側 AI GO(抽取線上 app / 撈 Data Center 表用;token 可選,沒有就互動登入)
+# 來源側 AI GO(抽取線上 app / 撈 Data Center 表用,帳號需 builder.access)
+# 憑證由用戶本人填寫;AI agent 不代填、不在對話中詢問密碼。
+# 有 AIGO_TOKEN 就用 token;否則用帳密自動換發並快取到 .aigo/token.json。
 AIGO_BASE_URL=https://ai-go.app
 AIGO_EMAIL=
+AIGO_PASSWORD=
 AIGO_TOKEN=
 """
 
@@ -179,18 +182,36 @@ def cmd_push(args) -> None:
     version_id = version["id"]
 
     # 推 metadata → 推 files(PUT files 全量取代,平台自動記 deploy 事件)
+    payload = build_metadata(meta)
     status, resp = api(env, "PUT", f"/modules/{module_id}/versions/{version_id}/metadata",
-                       body={"metadata": build_metadata(meta)})
+                       body={"metadata": payload})
     if status != 200:
         raise SystemExit(f"[FAIL] 推 metadata 失敗(HTTP {status}):{resp}")
-    print("[OK] metadata 已更新(含 data_center_schema)")
+
+    # ★ 寫後回讀:確認關鍵欄位真的存進去(對齊 builder skill 的二次 GET 驗證慣例)
+    status, detail = api(env, "GET", f"/modules/{module_id}")
+    stored = next((v.get("metadata") or {} for v in detail.get("versions", [])
+                   if v.get("id") == version_id), {}) if status == 200 else {}
+    for key in ("name", "category", "setup_schema", "data_center_schema"):
+        if payload.get(key) is not None and stored.get(key) != payload.get(key):
+            raise SystemExit(f"[FAIL] 寫後回讀:metadata 的 '{key}' 與送出內容不符——"
+                             f"平台可能靜默丟棄或改寫了它,請人工檢查後再繼續")
+    print("[OK] metadata 已更新並回讀驗證(含 data_center_schema)")
 
     files = collect_files(template)
     status, resp = api(env, "PUT", f"/modules/{module_id}/versions/{version_id}/files",
                        body={"files": files})
     if status != 200:
         raise SystemExit(f"[FAIL] 推檔案失敗(HTTP {status}):{resp}")
-    print(f"[OK] 已上傳 {resp.get('files_written', len(files))} 檔"
+
+    # ★ 寫後回讀:檔數一致
+    status, listing = api(env, "GET", f"/modules/{module_id}/versions/{version_id}/files")
+    if status == 200:
+        remote = listing if isinstance(listing, list) else listing.get(
+            "files", listing.get("items", []))
+        if len(remote) != len(files):
+            raise SystemExit(f"[FAIL] 寫後回讀:遠端檔數 {len(remote)} ≠ 上傳 {len(files)}")
+    print(f"[OK] 已上傳並回讀驗證 {resp.get('files_written', len(files))} 檔"
           f"({resp.get('total_bytes', '?')} bytes),平台已記 deploy 事件")
 
     status, pf = api(env, "GET", f"/modules/{module_id}/versions/{version_id}/preflight")
@@ -220,6 +241,11 @@ def cmd_submit(args) -> None:
     s7 = state["stages"]["S7_draft"]
     module_id, version_id = s7["module_id"], s7["version_id"]
 
+    s8 = state["stages"].get("S8_e2e", {})
+    if s8.get("tier") and s8["tier"] != "full":
+        raise SystemExit("[FAIL] 最後一次 e2e 是 quick 檔;送審前必須跑 full:"
+                         "python scripts/e2e_devportal.py --slug " + args.slug)
+
     e2e_report = work / "e2e_report.json"
     print(f"送審前確認(人工閘 S9):")
     print(f"  模組 {args.slug}  module={module_id}  version={version_id}")
@@ -232,6 +258,13 @@ def cmd_submit(args) -> None:
                        body={"note": args.note or ""})
     if status not in (200, 201):
         raise SystemExit(f"[FAIL] 送審失敗(HTTP {status}):{resp}")
+
+    # ★ 寫後回讀:確認版本狀態已轉 submitted
+    status, detail = api(env, "GET", f"/modules/{module_id}")
+    ver_state = next((v.get("state") for v in detail.get("versions", [])
+                      if v.get("id") == version_id), None) if status == 200 else None
+    if ver_state != "submitted":
+        print(f"[WARN] 寫後回讀:版本狀態為 {ver_state!r} 而非 submitted,請到平台確認")
 
     decisions = common.load_decisions(work)
     decisions["submit"] = {"decision": "submitted", "decided_by": "user", "at": common._now(),

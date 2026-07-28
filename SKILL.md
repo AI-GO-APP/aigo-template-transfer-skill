@@ -1,9 +1,30 @@
 ---
 name: aigo-template-transfer
-description: 把 AI GO custom app(線上 app 或 FDE repo)轉化為可上架的 template:抽取→去租戶化→Data Center schema→本地 audit→在 AI GO Developer 平台建立草稿並跑沙箱端到端測試→送審。每階段有硬閘,人工裁決不可代填。
+description: >
+  Use when converting an AI GO Custom App (live app on ai-go.app or an FDE repo)
+  into a marketplace template：抽取正規化 → 去租戶化 → Data Center schema →
+  本地 audit → 在 AI GO Developer 平台(developer.ai-go.app)建立 dev_module 草稿 →
+  沙箱端到端測試 → 送審。每階段有硬閘,人工裁決不可代填。
 ---
 
 # AI GO Custom App → Template 轉換 Skill
+
+本 Skill 協助 AI Agent 把 custom app 轉化為可上架的 template。
+支援 Claude Code / Antigravity / Cursor。
+
+## Phase -1:Skill 自我更新檢查(每次觸發時執行)
+
+> 若已裝 SessionStart hook(見 README「自動更新檢查」),本階段會自動被跳過(節流),
+> 不必重複執行。
+
+```bash
+python scripts/check_update.py     # macOS / Linux 用 python3
+```
+
+- **無輸出 = 沒事**:已最新、離線、或 24 小時內已檢查過都會靜默結束。
+- **有輸出 = 有新版**:把版本落差與變更摘要告知使用者,**詢問是否更新**;
+  同意 → 執行腳本印出的更新指令,完成後重新讀取 SKILL.md 讓新版在本回合生效。
+- **絕不自動覆寫**:未取得同意前不要執行更新指令。
 
 ## 鐵律(先讀)
 
@@ -19,6 +40,13 @@ description: 把 AI GO custom app(線上 app 或 FDE repo)轉化為可上架的 
    不讀、不轉、不輸出。掃到舊制 API(`ctx.db.*_object`)一律改寫為新制。
 5. **C 層不做。** 非 custom app(獨立 Next.js/Express/Flutter 等)不進本流程;
    轉換它們等於重寫,直接向用戶說明排除。
+6. **對外呼叫一律 httpx。** action 呼叫第三方 API 的正解是 `import httpx` +
+   `ctx.secrets.get()` + 強制 `timeout=`(builder skill v1.1.0 起 `ctx.http.call`
+   已移除記述);目標網域記入「安裝後設定清單」(租戶 Egress 白名單)。
+7. **憑證紀律。** 密碼只存在 `.env`(gitignored)且由**用戶本人**填寫;agent 不代填、
+   不在對話中詢問密碼、不把密碼放進指令列。用戶若在對話貼出密碼,提醒改填 `.env` 並更換。
+8. **出錯先查表。** 任何失敗先讀原始 error message 再查
+   `references/troubleshooting.md`,不要自行推測修法;權限與設定問題改 code 改不掉。
 
 ## Phase 0:前置檢查(每次開工先跑)
 
@@ -31,8 +59,10 @@ python scripts/devportal.py whoami
   2. 設定頁 https://developer.ai-go.app/settings →「API Token(PAT)」→ 發行(只顯示一次)
   3. `python scripts/devportal.py set-pat` 貼入
 - `level=read_only` → 告知用戶需請平台 admin 升級為 editor,**停在這裡**,不嘗試繞過。
-- 來源側需要 AI GO 帳號(builder.access):`.env` 填 `AIGO_EMAIL`(密碼互動輸入,不落檔)
-  或 `AIGO_TOKEN`。
+- 來源側 AI GO 帳號(builder.access):請用戶**本人**在 `.env` 填 `AIGO_EMAIL` /
+  `AIGO_PASSWORD`(或 `AIGO_TOKEN`)。`aigo_client.get_token()` 會走
+  「token 快取 → refresh 換發 → 帳密登入」,正常情況全程無感;
+  拋 RuntimeError 時把訊息原樣轉給用戶(內含設定指引)。
 
 ## Phase 0.5:候選判定(S0,人工閘)
 
@@ -66,6 +96,15 @@ INJ 三檔(data.json/db.json/actions.json)自動改空殼,原件在 `work/<slug>
 形狀檢查失敗(缺 entry / SDK 檔)→ 與用戶討論;缺 SDK 檔可從 starter 模板補 canonical 版本
 (這屬於「腳本外修改」,補完跑 `transfer_cli.py reset --from-stage S1` 重新過 S1)。
 
+S1 同時盤點**不隨 VFS 走的資源**(對齊 builder Phase 0)→ `work/<slug>/inventory.json`:
+- webhook 宣告(manifest 的 `"webhook": true` + `receive_webhook`)——對外端點
+- action 對外呼叫的網域——安裝租戶要設 Egress 白名單
+- app 排程(`GET /app-crons`;repo 來源撈不到,會註記請人工確認)
+- legacy CustomObject 痕跡
+
+這份盤點會在 Phase 6 由 normalize_meta 轉成「安裝後設定清單」寫進 long_description。
+**盤點結果要向用戶摘報**——排程與 webhook 是模板帶不走的能力,不講清楚 = 安裝後默默失效。
+
 ## Phase 2:污染掃描(S2)
 
 ```bash
@@ -92,6 +131,25 @@ python scripts/apply_decisions.py --slug <slug>           # 套用 + 複掃收�
 
 參數化時同步規劃 setup_schema:key 命名通用化(例:`LINE_CHANNEL_ACCESS_TOKEN`,
 不要 `URFIT_LINE_TOKEN`),Phase 4 後由 normalize_meta 寫入 meta。
+
+改寫對外呼叫時遵守鐵律 6:`ctx.http.call/fetch` 與硬編碼第三方端點一律改為
+
+```python
+import httpx
+
+def execute(ctx):
+    resp = httpx.post(
+        "https://api.example.com/v1/send",
+        headers={"Authorization": f"Bearer {ctx.secrets.get('EXAMPLE_API_KEY')}"},
+        json={"text": ctx.params.get("text")},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    ctx.response.json(resp.json())
+```
+
+webhook / 排程觸發的 action 改寫時**必須保持冪等**(平台 at-least-once,可能重複執行);
+去重 key 優先用事件本身的業務 id,其次 `ctx.params["delivery_id"]`。
 
 ## Phase 4:Data Center schema(S4,人工挑表)
 
@@ -141,32 +199,75 @@ python scripts/audit_local.py --slug <slug> [--ai-go-backend <path>]
 python scripts/devportal.py push --slug <slug>
 ```
 
-建模組(平台自動帶 1.0.0 draft)→ 推 metadata(含 data_center_schema)→ 推 files
-(平台自動記 deploy 事件)→ 平台 preflight 必須 ok。
+建模組(平台自動帶 1.0.0 draft)→ 推 metadata → 推 files(平台自動記 deploy 事件)
+→ 平台 preflight 必須 ok。**push 內建寫後回讀(★)**:metadata 關鍵欄位
+(name/category/setup_schema/data_center_schema)與檔數都會 GET 回來比對,
+不符即失敗——不要靠 API 回傳的 200 就宣稱成功。
 
 ## Phase 8:沙箱端到端測試(S8)
 
 ```bash
-python scripts/e2e_devportal.py --slug <slug> [--secrets-file s.json] [--expect e.json]
+python scripts/e2e_devportal.py --slug <slug>              # full(送審必須)
+python scripts/e2e_devportal.py --slug <slug> --quick      # 快速檔(迭代中重驗用)
 ```
 
-- 需要真實第三方憑證的 action:向用戶要 e2e 用測試值(`--secrets-file`),
-  或在 `--expect` 的 `allow_fail_actions` 宣告並向用戶說明。
-- runner 503 = 平台側未開 action runner,會記 SKIP;送審前向用戶明確標注此風險。
+分級(對齊 builder 的變更範圍分級):
+
+| 檔位 | 內容 | 用途 |
+|---|---|---|
+| `--quick` | preflight + 沙箱 secrets + 每張表 CRUD | 只改文案/CSS 後的快速重驗;不記 test 事件、不推進狀態機 |
+| full(預設) | quick + 全部 action 執行 + `seed_demo_data` 冪等重跑 + test 事件 | **送審前必須**;S9 會檢查最後一次 e2e 是 full |
+
+判讀規則(寫進報告,向用戶摘報時逐條說明):
+- 需要真實第三方憑證的 action:向用戶要 e2e 測試值(`--secrets-file`),
+  或在 `--expect` 的 `allow_fail_actions` 宣告並說明。
+- runner 503 = 平台側未開 action runner → 記 SKIP;送審前向用戶明確標注此風險。
+- `approval_status: "pending"` / 簽核例外 → 記 WARN,**非失敗、不可重試**
+  (重試 = 重複建單 + 重複開簽核單)。
+- webhook 宣告的 action 在沙箱以一般 action 驗證;**對外端點登記無法在沙箱測**,
+  已列入安裝後設定清單,向用戶說明。
 - 預設自動記 test 事件(滿足送審門檻);要走最真實的前端驗證改 `--no-event`,
   再開 `https://developer.ai-go.app/preview/<module_id>?v=<version_id>`(3 秒無錯自動記)。
 
 ## Phase 9:送審(S9,人工閘)
 
-向用戶摘報 e2e_report.json 重點(特別是 SKIP/WARN 項),由用戶執行:
+前置:最後一次 e2e 必須是 full(腳本會擋)。向用戶摘報 e2e_report.json 重點
+(特別是 SKIP/WARN 項與安裝後設定清單),由用戶執行:
 
 ```bash
 python scripts/devportal.py submit --slug <slug> --note "<給審核者的說明>"
 ```
 
-## 疑難排解
+submit 內建寫後回讀:確認版本狀態已轉 `submitted`。
 
-- 「內容閘:雜湊不符」:有閘外變更。找出變更來源,`transfer_cli.py reset --from-stage <變更點>` 重跑。
-- S7 409:slug 撞架上模板或他人模組 → 換 slug(回 S0 重新 init)。
-- PAT 401:已撤銷/過期 → 重新發行 + `set-pat`。
-- 平台 API 疑義:以 `GET /api/v1/dev-docs/endpoints` 自省為準(見 references/devportal-api.md)。
+## 驗證流程快速參照
+
+```
+每次改動 template 內容(回 Phase 3 補裁決後):
+  scan 複掃 → apply_decisions → audit_local → push → e2e --quick
+里程碑 / 送審前:
+  audit_local 全綠 → push(寫後回讀)→ e2e full(actions + 冪等 + test 事件)
+  → 摘報 e2e_report + 安裝後設定清單 → 用戶 submit
+```
+
+## 錯誤處理
+
+> 任何一步失敗 → **先完整讀出原始 error message**,再查
+> `references/troubleshooting.md` 速查表,不要自行推測修法。
+
+常見狀態碼語義:**401** 認證失效(PAT 撤銷/過期)|**403** 權限
+(Developer 端 read_only / AI GO 端缺 builder.access,**不重試不繞路**)|
+**409** slug 撞名或版本線衝突|**422** metadata/preflight 輸入不合法|
+**400** 業務規則|**503** 沙箱 runner 未配置(平台設定,非程式問題)。
+
+**Egress / 權限類錯誤 = 設定問題**:立刻停止改 code,把原始訊息轉給用戶,
+引導到後台 `/dashboard/settings/integrations`(或請租戶管理員/平台 admin 處理)。
+
+## 參考文件
+
+| 檔案 | 內容 |
+|------|------|
+| `references/template-contract.md` | 模板目錄佈局、meta 契約、DSL 規則、新舊 API 對照 |
+| `references/devportal-api.md` | Developer 平台 API 子集(權威:`GET /dev-docs/endpoints`) |
+| `references/pollution-signals.md` | 租戶污染訊號與人工判讀要點 |
+| `references/troubleshooting.md` | **出錯時**:症狀→成因→處置速查表 |

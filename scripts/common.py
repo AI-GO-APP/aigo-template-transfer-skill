@@ -65,7 +65,8 @@ def load_env() -> dict[str, str]:
                 continue
             k, v = line.split("=", 1)
             env[k.strip()] = v.strip().strip('"').strip("'")
-    for k in ("DEVPORTAL_API", "DEVPORTAL_PAT", "AIGO_BASE_URL", "AIGO_TOKEN", "AIGO_EMAIL"):
+    for k in ("DEVPORTAL_API", "DEVPORTAL_PAT", "AIGO_BASE_URL", "AIGO_TOKEN",
+              "AIGO_EMAIL", "AIGO_PASSWORD"):
         if os.environ.get(k):
             env[k] = os.environ[k]
     env.setdefault("DEVPORTAL_API", DEVPORTAL_DEFAULT_API)

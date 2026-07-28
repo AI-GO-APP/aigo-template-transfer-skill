@@ -18,33 +18,85 @@
 - 完成後做形狀檢查:entry 檔、package.json。任何一項缺 → S1 不過。
 """
 import argparse
-import getpass
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import aigo_client
 import common
+
+_URL_RE = re.compile(r"https?://([A-Za-z0-9.\-]+)")
+_LEGACY_API_RE = re.compile(
+    r"ctx\.db\.(?:query_object|insert_object|update_object|remove_object|list_custom_objects)"
+    r"|\b(?:submitRecord|listRecords|updateRecord|deleteRecord)\s*\(")
 
 
 def fetch_app_vfs(env: dict, app_id: str) -> dict:
     """GET /api/v1/builder/apps/{app_id} → 完整 app_info(含 vfs_state)。"""
-    base = env["AIGO_BASE_URL"].rstrip("/")
-    token = env.get("AIGO_TOKEN")
-    if not token:
-        email = env.get("AIGO_EMAIL") or input("AI GO 帳號 email:").strip()
-        password = getpass.getpass("AI GO 密碼(不會儲存):")
-        status, payload = common.http_call(
-            "POST", f"{base}/api/v1/auth/login", body={"email": email, "password": password})
-        if status != 200:
-            raise SystemExit(f"[FAIL] AI GO 登入失敗(HTTP {status}):{payload.get('detail', payload)}")
-        token = payload["access_token"]
-    status, app_info = common.http_call(
-        "GET", f"{base}/api/v1/builder/apps/{app_id}", token=token)
+    try:
+        status, app_info = aigo_client.api(env, "GET", f"builder/apps/{app_id}")
+    except RuntimeError as e:
+        raise SystemExit(f"[FAIL] {e}")
     if status != 200:
         raise SystemExit(f"[FAIL] 取得 app 失敗(HTTP {status}):{app_info.get('detail', app_info)}")
     return app_info
+
+
+def build_inventory(template: Path, env: dict, app_id: str | None) -> dict:
+    """盤點不隨 VFS 走的 app/租戶級資源:webhook 宣告、對外網域、排程、legacy 痕跡。
+
+    對齊 builder skill Phase 0 步驟 5/7/8——這些不盤,轉出來的模板會默默丟能力。"""
+    inventory: dict = {"webhooks": [], "egress_domains": [], "crons": [],
+                       "crons_note": "", "legacy_usage": []}
+
+    manifest_path = template / "actions" / "manifest.json"
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(manifest, dict):
+                for name, cfg in manifest.items():
+                    if isinstance(cfg, dict) and cfg.get("webhook"):
+                        inventory["webhooks"].append(name)
+            if (template / "actions" / "receive_webhook.py").exists() \
+                    and "receive_webhook" not in inventory["webhooks"]:
+                inventory["webhooks"].append("receive_webhook")
+        except json.JSONDecodeError:
+            pass
+
+    domains: set[str] = set()
+    actions_dir = template / "actions"
+    if actions_dir.is_dir():
+        for py in actions_dir.rglob("*.py"):
+            text = py.read_text(encoding="utf-8", errors="replace")
+            domains |= {d for d in _URL_RE.findall(text)
+                        if d not in ("localhost", "127.0.0.1")}
+            for m in _LEGACY_API_RE.finditer(text):
+                inventory["legacy_usage"].append(
+                    f"{py.relative_to(template).as_posix()}: {m.group(0)}")
+    for ts in template.rglob("*.ts*"):
+        if ts.is_file():
+            for m in _LEGACY_API_RE.finditer(ts.read_text(encoding="utf-8", errors="replace")):
+                inventory["legacy_usage"].append(
+                    f"{ts.relative_to(template).as_posix()}: {m.group(0)}")
+    inventory["egress_domains"] = sorted(domains)
+
+    if app_id:
+        try:
+            status, crons = aigo_client.api(env, "GET", "app-crons")
+            if status == 200:
+                items = crons if isinstance(crons, list) else crons.get("items", [])
+                inventory["crons"] = [c for c in items
+                                      if str(c.get("app_id", "")) in ("", str(app_id))]
+            else:
+                inventory["crons_note"] = f"GET /app-crons 失敗(HTTP {status}),請人工確認排程"
+        except RuntimeError:
+            inventory["crons_note"] = "無 AI GO 憑證,未盤點排程"
+    else:
+        inventory["crons_note"] = "repo 來源無線上 app,無法盤點排程;若原 app 已上線請人工確認"
+    return inventory
 
 
 def detect_layout(repo: Path, profiles_cfg: dict, vfs_subdir: str | None) -> tuple[Path, str]:
@@ -241,8 +293,26 @@ def main() -> None:
                           source=source_desc, files=count, problems=problems)
         raise SystemExit(1)
 
+    # 盤點不隨 VFS 走的資源(webhook/egress/排程/legacy)→ inventory.json
+    env = common.load_env()
+    inventory = build_inventory(template, env, args.from_app)
+    common.dump_json(work / "inventory.json", inventory)
+    if inventory["webhooks"]:
+        print(f"[NOTE] webhook 宣告:{', '.join(inventory['webhooks'])}(對外端點,進安裝後設定清單)")
+    if inventory["egress_domains"]:
+        print(f"[NOTE] 對外網域:{', '.join(inventory['egress_domains'])}(需 Egress 白名單,進安裝後設定清單)")
+    if inventory["crons"]:
+        print(f"[NOTE] 排程 {len(inventory['crons'])} 條(模板無法帶走,進安裝後設定清單)")
+    if inventory["crons_note"]:
+        print(f"[NOTE] {inventory['crons_note']}")
+    if inventory["legacy_usage"]:
+        print(f"[NOTE] legacy CustomObject 痕跡 {len(inventory['legacy_usage'])} 處(S2/S3 會要求改寫)")
+
     common.mark_stage(work, state, "S1_acquire", "passed",
-                      source=source_desc, layout=profile_name, files=count)
+                      source=source_desc, layout=profile_name, files=count,
+                      webhooks=len(inventory["webhooks"]),
+                      egress_domains=len(inventory["egress_domains"]),
+                      crons=len(inventory["crons"]))
     print(f"[OK] S1 完成:{count} 檔 → {template}(佈局:{profile_name})")
     print("下一步:python scripts/scan.py --slug", args.slug)
 

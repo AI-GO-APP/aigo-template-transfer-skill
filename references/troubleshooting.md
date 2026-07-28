@@ -1,0 +1,44 @@
+# 錯誤速查
+
+> 任何一步失敗、或收到非預期狀態碼 → 先查本表,**不要自行推測修法**。
+> 多數症狀有明確成因,猜測通常會改錯地方。
+> 鐵律:**權限與設定問題改 code 改不掉**——立刻停手,把原始 error message 轉給用戶。
+
+## 狀態碼語義分野
+
+| 狀態碼 | 語義 | 典型處置 |
+|---|---|---|
+| 401 | 認證失效 | PAT 已撤銷/過期 → 重新發行 + `set-pat`;AIGO token → 快取自動換發,仍失敗檢查 .env 帳密 |
+| 403 | 權限不足 | 分兩種:Developer 端 `read_only`(請 admin 升 editor)/ AI GO 端缺 `builder.access`(請租戶管理員開通)。**不重試、不繞路** |
+| 409 | 衝突或配額 | slug 撞架上模板或他人模組 → 換 slug 重新 init;版本線衝突 → 已有進行中版本,不要 POST /versions |
+| 422 | 輸入不合法 | 讀 detail:metadata 欄位(tags 白名單、category、custom_objects_schema 被擋)或 preflight issues |
+| 400 | 業務規則拒絕 | 讀 detail 照改,不要瞎猜 |
+| 503 | 服務未配置 | 沙箱 action → 平台 `RUNNER_URL` 未設,記 SKIP 並向用戶標注;不是你的 code 問題 |
+
+## 各階段症狀速查
+
+| 症狀 | 成因 | 處置 |
+|---|---|---|
+| 「階段閘:S_x 尚未通過」 | 跳關 | 依序補完前置階段;人工閘用 `transfer_cli.py gate` |
+| 「內容閘:雜湊不符」 | template/ 有閘外變更 | 找出變更來源;合法變更 → `reset --from-stage <變更點>` 重跑;不明變更 → 先查是誰改的 |
+| S1 偵測不到佈局 | B 層自開發佈局 | `--vfs-subdir` 或 `--mapping` 檔;完全非 custom app(C 層)→ 排除,不硬轉 |
+| S1 缺 SDK 檔 | 來源 repo 不完整 | 從 starter 模板補 canonical 三檔後 `reset --from-stage S1` |
+| S3「找不到 old 字串」 | 前一筆裁決已改掉同段內容 | 正常;確認複掃結果收斂即可 |
+| S3 blocker 不可 keep | 憑證/舊制 API/禁用 import | 只能 replace 或 delete_file;舊制 API 改寫對照見 template-contract.md |
+| S4 403 | 資料中心存取權 | 見上表 403;本 skill 只讀不建表,不需要 system.admin |
+| S6 DSL 驗證失敗 | 系統欄名/relation/成環 | 錯誤訊息含位置,對照 template-contract.md 修 dc_schema |
+| S6 secrets 覆蓋失敗 | `ctx.secrets.get` 的 key 未宣告 | 補進 setup_schema(經 normalize_meta --setup-schema),不要刪程式碼裡的讀取 |
+| S7 preflight fail | entry/imports/secrets/scopes/actions/manifest | 讀 issues 逐條修;bare import 只支援 5 套件,別加第三方前端依賴 |
+| S7 tags 422 | tags 不在平台白名單 | `GET /refs/tags` 取合法值 |
+| S7 寫後回讀不符 | 平台改寫/丟棄欄位 | 人工比對送出與回讀內容;確認平台版本行為後回報 |
+| S8 action 全部 503 | runner 未配置 | 平台側設定;e2e 記 SKIP,送審前向用戶明確標注此風險 |
+| S8 approval_status: pending | 租戶簽核流程攔截 | **非失敗、不可重試**(重試 = 重複建單);記 WARN 即可 |
+| S8 action 需要真實憑證 | dummy secret 打不通第三方 | `--secrets-file` 給測試值,或 `--expect` 宣告 allow_fail 並向用戶說明 |
+| S9 被擋:e2e 是 quick | 送審要求 full | 重跑 `e2e_devportal.py --slug <slug>`(不帶 --quick) |
+| 對外呼叫被擋(egress) | 網域不在租戶白名單 | **停止改 code**;引導用戶到後台 `/dashboard/settings/integrations` 加網域 |
+
+## 查不到怎麼辦
+
+1. 完整讀出 API 回傳的 error message(原文,不要摘要後腦補)。
+2. 對 Developer API 疑義:`GET /api/v1/dev-docs/endpoints` 自省權威清單。
+3. 仍不明 → 把原始訊息與重現步驟轉給用戶,不要試錯式亂改。

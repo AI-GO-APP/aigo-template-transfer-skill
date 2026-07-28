@@ -36,13 +36,13 @@
       "suggestion": "確認此 key 是產品功能所需並納入 setup_schema;客戶專屬者改名為通用 key 或移除"
     },
     {
-      "id": "egress_service",
-      "description": "ctx.http.call 指向的 egress service(租戶級資源,跨租戶不保證存在)",
+      "id": "legacy_ctx_http",
+      "description": "ctx.http.call/fetch — builder skill v1.1.0 起已移除此路徑,對外呼叫一律改 import httpx",
       "pattern": "ctx\\.http\\.(?:call|fetch)\\s*\\(\\s*['\"]([^'\"\\n]+)['\"]",
       "extensions": [".py"],
-      "severity": "medium",
+      "severity": "high",
       "capture": true,
-      "suggestion": "在模板文件/long_description 說明安裝租戶需自行註冊此 egress service;service 名應通用化"
+      "suggestion": "改寫為 import httpx + ctx.secrets.get() + 強制 timeout=;目標網域記入安裝後設定清單(租戶需在後台 /dashboard/settings/integrations 加入 Egress 白名單)"
     },
     {
       "id": "hardcoded_url",
@@ -51,7 +51,7 @@
       "extensions": [".ts", ".tsx", ".py"],
       "exclude_patterns": ["www.w3.org", "reactjs.org", "developer.mozilla.org", "schema.org"],
       "severity": "high",
-      "suggestion": "客戶網域→刪除或參數化(setup_schema);第三方 API 端點→改走 egress service"
+      "suggestion": "客戶專屬網域→刪除或參數化(setup_schema);第三方 API 端點→保留但網域記入安裝後設定清單(Egress 白名單),金鑰一律 ctx.secrets.get()"
     },
     {
       "id": "line_channel_artifact",

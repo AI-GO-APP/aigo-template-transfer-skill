@@ -57,9 +57,11 @@ def main() -> None:
     ]
 
     def auto_keep_if_approved(f: dict) -> bool:
+        # 雙向包含:單行 replace(new ⊆ 行)與多行 replace(行 ⊆ new)都要涵蓋
         if f["severity"] == "blocker":
             return False
-        if any(sn and sn in f["excerpt"] for sn in approved_snippets):
+        line = f["excerpt"].strip()
+        if line and any(sn and (sn in line or line in sn) for sn in approved_snippets):
             fd[f["id"]] = {"action": "keep", "decided_by": "user",
                            "note": "自動:此行內容即用戶核准的 replace 結果"}
             return True

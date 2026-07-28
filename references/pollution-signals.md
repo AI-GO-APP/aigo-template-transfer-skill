@@ -16,21 +16,28 @@
 
 - **硬編碼 UUID**:最常見於 `submitRecord(objectId, ...)` 第一參數、寫死的 app_id/tenant_id。
   正解通常是改走新制表操作或執行期取得。
-- **硬編碼網址**:客戶網域 → 刪或參數化;第三方 API 端點 → 改走 egress service
-  (`ctx.http.call(service, path)`,租戶安裝後自行註冊 service)。
+- **硬編碼網址**:客戶專屬網域 → 刪或參數化;第三方 API 端點 → **保留(直接 httpx 呼叫)**,
+  但網域必須記入「安裝後設定清單」——安裝租戶要在後台 `/dashboard/settings/integrations`
+  把該網域加入 Egress 白名單,否則 action 一律連不出去(這是設定問題,改 code 改不掉)。
+- **`ctx.http.call/fetch`**:builder skill v1.1.0 起已移除此路徑的所有記述——
+  對外呼叫一律改寫為 `import httpx` + `ctx.secrets.get()` + 強制 `timeout=`。
 - **前端舊制 Custom Data SDK**(`submitRecord/listRecords/...`):綁 objectId 的舊資料通道。
 
 ## 逐條確認(medium)
 
 - **`ctx.secrets.get("K")` 的 K**:每個 key 都要問——是產品功能(→ setup_schema 收編、
   通用化命名)還是這家客戶的怪癖(→ 連功能一起刪)?
-- **`ctx.http.call(service, ...)` 的 service 名**:egress 是租戶級資源;模板要在說明文件
-  告知安裝租戶需註冊哪些 service,service 名應通用化。
 - **email / 電話**:客戶聯絡人 → 刪或換 demo 資料。
 - **`print()` in actions**:規範用 `ctx.log()`。
 
 ## 結構性污染(掃描器之外,靠流程處理)
 
+- **Webhook 宣告與 App 排程**:`actions/manifest.json` 的 `"webhook": true` 是對外端點宣告,
+  排程(app-crons)是 app 級設定、不在 VFS 裡——兩者都不會跟著 VFS 走。S1 盤點寫入
+  inventory.json,轉換後由「安裝後設定清單」告知安裝租戶重新登記/重建;
+  webhook/排程 action 必須冪等(平台 at-least-once,可能重複執行)。
+- **Egress 白名單**:action 對外呼叫的網域是租戶級白名單設定。S1 從 action 原始碼
+  撈出全部對外網域寫入 inventory.json,進安裝後設定清單。
 - **INJ 三檔**(`src/data.json`、`src/db.json`、`src/actions.json`):本身就是租戶資料快照
   (表定義含真實 id、Data Reference 含快取資料列)。S1 抽取時自動改空殼,原件留 raw/。
 - **真實資料**:模板的 demo 資料必須是創作的(繁中、台灣在地化),不得沿用客戶資料——

@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 """S8 Developer 沙箱端到端測試:secrets → seed → CRUD → actions → test 事件。
 
-    python scripts/e2e_devportal.py --slug my_template
+    python scripts/e2e_devportal.py --slug my_template                # full(預設)
+    python scripts/e2e_devportal.py --slug my_template --quick        # 快速檔
     python scripts/e2e_devportal.py --slug my_template --secrets-file secrets.e2e.json
     python scripts/e2e_devportal.py --slug my_template --expect expect.e2e.json --no-event
 
-測試設計:
-1. preflight 必須 ok(S7 已驗,這裡重驗防漂移)
-2. 沙箱 secrets:依 setup_schema 寫入;值取自 --secrets-file,缺的用 dummy 並記錄
-3. 表 CRUD:對 data_center_schema 每張表經 sandbox proxy 做 insert→query→update→delete
-4. actions:逐一執行 manifest 宣告的 action;seed_demo_data 跑兩次驗冪等
-   - runner 未配置(503)→ 該 phase 記 SKIP,不視為失敗,但會標注在報告
-   - --expect 檔可宣告允許失敗的 action(如需要真實第三方憑證者)→ 記 WARN
-5. 全部硬性 phase 通過 → POST test 事件(detail 附報告摘要),滿足送審門檻
-   - 若要走瀏覽器 preview 的正式 test 事件,改用 --no-event,再開
-     https://developer.ai-go.app/preview/<module_id>?v=<version_id>
+分級(對齊 builder skill Phase 4.2 的變更範圍分級):
+- --quick:preflight + secrets + 表 CRUD。適用只改文案/CSS 後的重驗。
+  quick 不記 test 事件(不足以代表可用性)。
+- full(預設):quick + 全部 action 執行 + seed_demo_data 冪等重跑 + test 事件。
+  送審(S9)一律要求最後一次 e2e 是 full。
+
+判讀規則:
+- runner 未配置(503)→ 該 phase 記 SKIP,不視為失敗,但會標注在報告
+- 回應含 approval_status=="pending" / 簽核例外 → 記 WARN 不記 FAIL:
+  那是租戶簽核流程攔截(builder 核心規則 24),不是 bug,且**不可重試**
+- --expect 檔可宣告允許失敗的 action(如需要真實第三方憑證者)→ 記 WARN
+- webhook 宣告的 action 在沙箱以一般 action 方式驗證;對外端點登記本身
+  無法在沙箱測,已列入安裝後設定清單
+- 若要走瀏覽器 preview 的正式 test 事件,改用 --no-event,再開
+  https://developer.ai-go.app/preview/<module_id>?v=<version_id>
 """
 import argparse
 import sys
@@ -35,6 +41,8 @@ def main() -> None:
     common.utf8_stdout()
     parser = argparse.ArgumentParser(description="S8 Developer 沙箱 e2e")
     parser.add_argument("--slug", required=True)
+    parser.add_argument("--quick", action="store_true",
+                        help="快速檔:preflight+secrets+CRUD,不跑 action、不記 test 事件")
     parser.add_argument("--secrets-file", help="e2e 用 secrets 值 JSON({KEY: value})")
     parser.add_argument("--expect", help="期望設定 JSON({allow_fail_actions: [..]})")
     parser.add_argument("--no-event", action="store_true",
@@ -54,9 +62,19 @@ def main() -> None:
     allow_fail = set(expect.get("allow_fail_actions", []))
     secrets_values = common.load_json(Path(args.secrets_file)) if args.secrets_file else {}
 
+    inv_path = work / "inventory.json"
+    inventory = common.load_json(inv_path) if inv_path.exists() else {}
+    webhook_actions = set(inventory.get("webhooks", []))
+
     report: list[dict] = []
     hard_fail = False
     runner_down = False
+
+    def is_approval_pending(resp) -> bool:
+        """簽核攔截語義(builder 核心規則 24):pending 非成功非失敗,不可重試。"""
+        text = str(resp)
+        return '"approval_status": "pending"' in text or "approval_status='pending'" in text \
+            or "簽核" in text or "approval_status" in text and "pending" in text
 
     # Phase 1: preflight
     status, pf = api(env, "GET", f"/modules/{module_id}/versions/{vid}/preflight")
@@ -105,6 +123,10 @@ def main() -> None:
                 else f"/sandbox/v/{vid}/proxy/{vid}/{tkey}")
         status, created = api(env, "POST", base, body=sample)
         if status not in (200, 201):
+            if is_approval_pending(created):
+                run_phase(report, f"crud:{tkey}", "warn",
+                          "簽核流程攔截(pending)——非失敗,不可重試")
+                continue
             run_phase(report, f"crud:{tkey}", "fail", f"insert HTTP {status}:{created}")
             hard_fail = True
             continue
@@ -115,11 +137,13 @@ def main() -> None:
             continue
         run_phase(report, f"crud:{tkey}", "pass", "insert+query")
 
-    # Phase 4: actions
+    # Phase 4: actions(--quick 跳過)
     actions_dir = template / "actions"
     manifest_path = actions_dir / "manifest.json"
     action_names: list[str] = []
-    if manifest_path.exists():
+    if args.quick:
+        run_phase(report, "actions", "skip", "--quick 檔不跑 action;送審前需跑 full")
+    elif manifest_path.exists():
         manifest = common.load_json(manifest_path)
         if isinstance(manifest, dict):
             action_names = [n for n in manifest.keys() if n != "actions"]
@@ -135,12 +159,17 @@ def main() -> None:
 
     for name in action_names:
         status, resp = run_action(name)
+        tag = "(webhook)" if name in webhook_actions else ""
         if status == 503:
-            run_phase(report, f"action:{name}", "skip", "runner 未配置(503)")
+            run_phase(report, f"action:{name}{tag}", "skip", "runner 未配置(503)")
             runner_down = True
             continue
+        if is_approval_pending(resp):
+            run_phase(report, f"action:{name}{tag}", "warn",
+                      "簽核流程攔截(pending)——非失敗,不可重試")
+            continue
         if 200 <= status < 300:
-            run_phase(report, f"action:{name}", "pass")
+            run_phase(report, f"action:{name}{tag}", "pass")
             if name == "seed_demo_data":
                 status2, resp2 = run_action(name)
                 if 200 <= status2 < 300:
@@ -150,10 +179,10 @@ def main() -> None:
                               f"HTTP {status2}")
                     hard_fail = True
         elif name in allow_fail:
-            run_phase(report, f"action:{name}", "warn",
+            run_phase(report, f"action:{name}{tag}", "warn",
                       f"HTTP {status}(expect 檔允許失敗:需真實憑證)")
         else:
-            run_phase(report, f"action:{name}", "fail", f"HTTP {status}:{str(resp)[:200]}")
+            run_phase(report, f"action:{name}{tag}", "fail", f"HTTP {status}:{str(resp)[:200]}")
             hard_fail = True
 
     # Phase 5: 表列筆數(資訊性)
@@ -162,6 +191,7 @@ def main() -> None:
         run_phase(report, "tables-count", "pass", str(counts)[:200])
 
     summary = {
+        "tier": "quick" if args.quick else "full",
         "pass": sum(1 for r in report if r["status"] == "pass"),
         "fail": sum(1 for r in report if r["status"] == "fail"),
         "skip": sum(1 for r in report if r["status"] == "skip"),
@@ -174,6 +204,10 @@ def main() -> None:
     if hard_fail:
         common.mark_stage(work, state, "S8_e2e", "failed", **summary)
         raise SystemExit("[FAIL] S8 未通過,修正後重跑(必要時回 S3/S6)")
+
+    if args.quick:
+        print("[OK] quick 檔通過。送審前仍需跑 full(不帶 --quick)以完成可用性驗證。")
+        return  # 不推進狀態機、不記 test 事件
 
     # Phase 6: test 事件(送審門檻:最後 test 不早於最後 deploy)
     if args.no_event:

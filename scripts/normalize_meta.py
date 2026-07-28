@@ -30,6 +30,58 @@ CATEGORIES = {
 ACCESS_MODES = {"internal", "external", "self_built"}
 
 
+def refresh_inventory(work, template) -> dict:
+    """以目前 template 內容重盤 webhook/egress/legacy(S1 快照在 S3 改寫後會過時,
+    例:客戶網域已被替換,清單卻還列舊網域);排程與其註記保留 S1 結果(與內容無關)。"""
+    from acquire import build_inventory
+    inv_path = work / "inventory.json"
+    old = common.load_json(inv_path) if inv_path.exists() else {}
+    fresh = build_inventory(template, {}, None)
+    fresh["crons"] = old.get("crons", [])
+    fresh["crons_note"] = old.get("crons_note", "")
+    common.dump_json(inv_path, fresh)
+    return fresh
+
+
+def build_post_install_checklist(work, meta: dict) -> str:
+    """從 inventory.json 與 setup_schema 生成「安裝後設定」markdown 段落。
+    這些是不隨模板 VFS 走的租戶級設定,不寫清楚 = 安裝後功能默默失效。"""
+    template = work / "template"
+    if template.is_dir():
+        inventory = refresh_inventory(work, template)
+    else:
+        inv_path = work / "inventory.json"
+        inventory = common.load_json(inv_path) if inv_path.exists() else {}
+    lines: list[str] = []
+
+    secrets = list((meta.get("setup_schema") or {}).keys())
+    if secrets:
+        lines.append("1. **金鑰設定**:安裝表單會詢問 " + "、".join(f"`{k}`" for k in secrets)
+                     + ";未填的功能將無法運作。")
+    if inventory.get("egress_domains"):
+        lines.append("2. **Egress 白名單**:本模板的 action 會對外呼叫,"
+                     "請租戶管理員在後台 `/dashboard/settings/integrations` 加入網域:"
+                     + "、".join(f"`{d}`" for d in inventory["egress_domains"])
+                     + "。白名單未設定前,對外呼叫一律被擋(這是設定問題,非程式錯誤)。")
+    if inventory.get("webhooks"):
+        lines.append("3. **Webhook 端點**:" + "、".join(f"`{w}`" for w in inventory["webhooks"])
+                     + " 為對外接收端點,發布後請到事件來源系統重新登記新 URL"
+                     "(同一事件源不可同時登記新舊兩條,會重複執行)。")
+    if inventory.get("crons"):
+        cron_lines = []
+        for c in inventory["crons"]:
+            name = c.get("name") or c.get("action_name") or "?"
+            sched = c.get("cron") or c.get("schedule") or c.get("interval") or "?"
+            cron_lines.append(f"`{name}`({sched})")
+        lines.append("4. **排程重建**:原 app 綁有排程,模板無法帶走,"
+                     "請安裝後到 `/dashboard/settings/app-crons` 重建:"
+                     + "、".join(cron_lines) + "。")
+
+    if not lines:
+        return ""
+    return "## 安裝後設定\n\n" + "\n".join(lines)
+
+
 def main() -> None:
     common.utf8_stdout()
     parser = argparse.ArgumentParser(description="建立單一合規 _template_meta.json")
@@ -98,6 +150,15 @@ def main() -> None:
             meta["data_center_schema"] = schema
         else:
             meta.pop("data_center_schema", None)
+
+    # 4.5 安裝後設定清單:webhook/排程/Egress 不隨模板走,必須明白告知安裝租戶
+    checklist = build_post_install_checklist(work, meta)
+    if checklist:
+        base = meta.get("long_description") or meta.get("description") or ""
+        marker = "## 安裝後設定"
+        if marker in base:
+            base = base.split(marker)[0].rstrip()
+        meta["long_description"] = (base + "\n\n" if base else "") + checklist
 
     # 5. 就地驗證(必填欄位、字彙)
     problems = []

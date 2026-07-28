@@ -16,12 +16,31 @@
 - **Developer 平台整合**:PAT 引導設置、建模組推草稿、平台 preflight、沙箱 secrets/CRUD/actions
   端到端測試、test 事件與送審門檻。
 
+## 安裝方式
+
+```bash
+# 專案內(或裝到 ~/.claude/skills/ 供全域使用)
+git clone https://github.com/AI-GO-APP/aigo-template-transfer-skill.git
+cd aigo-template-transfer-skill
+uv sync          # 或 pip install httpx(scripts 唯一第三方相依)
+```
+
+Claude Code:把本目錄放進 `.claude/skills/` 或以 `--add-dir` 掛入;
+Antigravity / Cursor:把 `SKILL.md` 加入 agent 的 rules/context。
+
+### 自動更新檢查(建議)
+
+Skill 內建 `scripts/check_update.py`(零相依、離線靜默、24h 節流、絕不自動覆寫)。
+把 `resources/hooks/claude-code.settings.example.json` 的 hooks 區塊合併進
+`~/.claude/settings.json`,SessionStart 時自動檢查;或每次觸發 skill 時由
+Phase -1 手動執行。更新一律 `git pull --ff-only`,有本地修改不會被覆蓋。
+
 ## 快速開始
 
 ```bash
-uv sync                                        # 或 pip install httpx
 python scripts/devportal.py setup              # 產生 .env + PAT 引導
 python scripts/devportal.py set-pat            # 貼入 PAT
+# 用戶本人在 .env 填 AIGO_EMAIL / AIGO_PASSWORD(來源側,builder.access)
 python scripts/transfer_cli.py init --slug my_template
 ```
 
@@ -36,9 +55,13 @@ python scripts/transfer_cli.py init --slug my_template
 | S4 | Data Center schema | `dc_extract.py --tables ...`(人工挑表) |
 | S5 | demo 資料 | 起草 + `gate --stage S5`(人工) |
 | S6 | 本地 audit 硬閘 | `normalize_meta.py` + `audit_local.py` |
-| S7 | Developer 建草稿 + preflight | `devportal.py push` |
-| S8 | 沙箱端到端測試 | `e2e_devportal.py` |
-| S9 | 送審 | `devportal.py submit`(人工確認) |
+| S7 | Developer 建草稿 + preflight(寫後回讀) | `devportal.py push` |
+| S8 | 沙箱端到端測試(`--quick`/full 兩檔) | `e2e_devportal.py` |
+| S9 | 送審(要求最後一次 e2e 為 full) | `devportal.py submit`(人工確認) |
+
+S1 會同時盤點不隨 VFS 走的資源(webhook 宣告、Egress 網域、app 排程)→
+`inventory.json`,並在 S6 自動轉成「安裝後設定清單」寫入模板 long_description——
+確保安裝租戶知道要補哪些租戶級設定,模板裝完即可用。
 
 ## 測試
 

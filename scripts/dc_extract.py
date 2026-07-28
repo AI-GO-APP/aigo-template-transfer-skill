@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import aigo_client
 import common
 
 common.add_vendor_to_path()
@@ -31,36 +32,31 @@ _TABLE_REF_RE = re.compile(
     r"ctx\.db\.(?:query_table|insert_row|update_row|delete_row)\s*\(\s*['\"]([^'\"\n]+)['\"]"
 )
 
+_403_GUIDE = ("[FAIL] 資料中心存取被拒(HTTP 403)。這是權限問題,不要重試、不要繞路:\n"
+              "  帳號缺 builder.access 或資料中心存取權——請租戶管理員開通後再跑。\n"
+              "  (本 skill 只做讀取,不需要 system.admin;若訊息指向 system.admin\n"
+              "   代表打到了 DDL 端點,屬異常,請回報)")
 
-def get_aigo_token(env: dict) -> str:
-    token = env.get("AIGO_TOKEN")
-    if token:
-        return token
-    import getpass
-    email = env.get("AIGO_EMAIL") or input("AI GO 帳號 email:").strip()
-    password = getpass.getpass("AI GO 密碼(不會儲存):")
-    status, payload = common.http_call(
-        "POST", f"{env['AIGO_BASE_URL'].rstrip('/')}/api/v1/auth/login",
-        body={"email": email, "password": password})
+
+def dc_get(env: dict, path: str):
+    try:
+        status, payload = aigo_client.api(env, "GET", path)
+    except RuntimeError as e:
+        raise SystemExit(f"[FAIL] {e}")
+    if status == 403:
+        raise SystemExit(_403_GUIDE + f"\n  原始訊息:{payload.get('detail', payload)}")
     if status != 200:
-        raise SystemExit(f"[FAIL] AI GO 登入失敗(HTTP {status}):{payload.get('detail', payload)}")
-    return payload["access_token"]
+        raise SystemExit(f"[FAIL] GET /{path} 失敗(HTTP {status}):{payload}")
+    return payload
 
 
-def fetch_tables(env: dict, token: str) -> list[dict]:
-    base = env["AIGO_BASE_URL"].rstrip("/")
-    status, payload = common.http_call(f"GET", f"{base}/api/v1/data-center/tables", token=token)
-    if status != 200:
-        raise SystemExit(f"[FAIL] 撈表失敗(HTTP {status}):{payload}")
+def fetch_tables(env: dict) -> list[dict]:
+    payload = dc_get(env, "data-center/tables")
     return payload if isinstance(payload, list) else payload.get("items", payload.get("tables", []))
 
 
-def fetch_table_detail(env: dict, token: str, key: str) -> dict:
-    base = env["AIGO_BASE_URL"].rstrip("/")
-    status, payload = common.http_call(f"GET", f"{base}/api/v1/data-center/tables/{key}", token=token)
-    if status != 200:
-        raise SystemExit(f"[FAIL] 撈表 {key} 失敗(HTTP {status}):{payload}")
-    return payload
+def fetch_table_detail(env: dict, key: str) -> dict:
+    return dc_get(env, f"data-center/tables/{key}")
 
 
 def table_to_dsl(detail: dict) -> dict:
@@ -124,8 +120,7 @@ def main() -> None:
     env = common.load_env()
 
     if args.list:
-        token = get_aigo_token(env)
-        tables = fetch_tables(env, token)
+        tables = fetch_tables(env)
         refs = referenced_tables(template)
         print(f"租戶自建表({len(tables)} 張;* = 本 app 的 actions 有引用):")
         for t in tables:
@@ -151,8 +146,7 @@ def main() -> None:
             selected = [d.get("key") or d.get("physical_name") for d in details]
         else:
             selected = [k.strip() for k in args.tables.split(",") if k.strip()]
-            token = get_aigo_token(env)
-            details = [fetch_table_detail(env, token, key) for key in selected]
+            details = [fetch_table_detail(env, key) for key in selected]
         schema = {"version": 1, "tables": [table_to_dsl(d) for d in details]}
 
     # 交叉檢查:actions 引用的表必須被 DSL 覆蓋
