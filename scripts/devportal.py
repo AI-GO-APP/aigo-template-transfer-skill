@@ -147,11 +147,14 @@ def cmd_push(args) -> None:
     if meta.get("tags"):
         status, tags_ref = api(env, "GET", "/refs/tags")
         if status == 200:
-            valid = {t if isinstance(t, str) else t.get("slug") or t.get("name")
-                     for t in (tags_ref if isinstance(tags_ref, list) else tags_ref.get("items", []))}
+            # 回應形狀 {"tags": [...], "source": "registry+aigo+local"};候選集 =
+            # admin registry ∪ 架上使用中 ∪ 本地既有,不可當場新造字串(tag 治理 ADR-0005)
+            raw = tags_ref if isinstance(tags_ref, list) else tags_ref.get("tags", [])
+            valid = {t if isinstance(t, str) else t.get("slug") or t.get("name") for t in raw}
             bad = [t for t in meta["tags"] if t not in valid]
             if bad:
-                raise SystemExit(f"[FAIL] tags 不在平台白名單:{bad}(GET /refs/tags 取得合法值)")
+                raise SystemExit(f"[FAIL] tags 不在平台候選集:{bad}——合法值見 GET /refs/tags;"
+                                 f"要新增 tag 需 admin 在標籤總覽建立(registry)")
 
     # 建立或沿用模組(建立時平台自動帶 1.0.0 draft,不可再 POST /versions)
     module_id = state["stages"].get("S7_draft", {}).get("module_id")

@@ -4,6 +4,12 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.3.3
+
+- 對照 developer 平台 PR #33(admin tag 治理):修正 push 前置 tags 驗證解析
+  `GET /refs/tags` 的回應鍵(`tags`,先前誤讀 `items` 會把合法 tag 全判不合法);
+  錯誤訊息補充 tag 候選集規則(registry ∪ 架上 ∪ 本地,新 tag 需 admin 於標籤總覽建立)。
+
 ## 0.3.2
 
 - ai-go-templates 已棄用:移除 SKILL.md 候選判定與 README 相關系統中指向該 repo 的
