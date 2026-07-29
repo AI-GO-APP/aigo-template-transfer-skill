@@ -16,11 +16,18 @@
 
 - **硬編碼 UUID**:最常見於 `submitRecord(objectId, ...)` 第一參數、寫死的 app_id/tenant_id。
   正解通常是改走新制表操作或執行期取得。
-- **硬編碼網址**:客戶專屬網域 → 刪或參數化;第三方 API 端點 → **保留(直接 httpx 呼叫)**,
-  但網域必須記入「安裝後設定清單」——安裝租戶要在後台 `/dashboard/settings/integrations`
-  把該網域加入 Egress 白名單,否則 action 一律連不出去(這是設定問題,改 code 改不掉)。
-- **`ctx.http.call/fetch`**:builder skill v1.1.0 起已移除此路徑的所有記述——
-  對外呼叫一律改寫為 `import httpx` + `ctx.secrets.get()` + 強制 `timeout=`。
+- **硬編碼網址**:客戶專屬網域 → 刪或參數化;第三方 API 端點 → **改走 egress 閘道**
+  `ctx.http.call("<slug>", "<path>")`,base_url 落在租戶註冊的 EgressService。
+  slug 必須記入「安裝後設定清單」——安裝租戶要在後台 `/dashboard/settings/integrations`
+  以同名 slug 註冊(填 base_url 與自己的金鑰),否則 action 一律連不出去
+  (這是設定問題,改 code 改不掉)。
+- **raw `httpx` / `requests` / `urllib.request`**:runner 是 default-deny egress
+  (ADR-0003:SG 只放行 ctx-only service),raw 連線**直接 timeout**——沙箱測不過,
+  而送審門檻要求每支 enabled action 至少一次 success,等於卡死。一律改 `ctx.http.call`。
+- **自帶 `Authorization` header**:即使用了 `ctx.http.call`,自己組
+  `headers={"Authorization": ...}` 也沒用——AI GO `_sanitize_headers` 與 Developer 平台
+  `dev_ctx._STRIPPED` 兩邊都會剝掉,實測回 401。金鑰歸 EgressService,action 不碰;
+  連帶地也不要為它開 `setup_schema` 欄位。
 - **前端舊制 Custom Data SDK**(`submitRecord/listRecords/...`):綁 objectId 的舊資料通道。
 
 ## 逐條確認(medium)
@@ -36,8 +43,10 @@
   排程(app-crons)是 app 級設定、不在 VFS 裡——兩者都不會跟著 VFS 走。S1 盤點寫入
   inventory.json,轉換後由「安裝後設定清單」告知安裝租戶重新登記/重建;
   webhook/排程 action 必須冪等(平台 at-least-once,可能重複執行)。
-- **Egress 白名單**:action 對外呼叫的網域是租戶級白名單設定。S1 從 action 原始碼
-  撈出全部對外網域寫入 inventory.json,進安裝後設定清單。
+- **Egress service**:action 對外呼叫走閘道,租戶要以**同名 slug** 註冊 EgressService
+  (base_url + 該租戶自己的憑證)。S1 從 action 原始碼撈出全部對外網域與
+  `ctx.http.call` 的 slug 寫入 inventory.json;轉換後 slug 進 `required_egress` 宣告
+  (安裝流程會主動提示租戶),網域則進安裝後設定清單供租戶填 base_url。
 - **INJ 三檔**(`src/data.json`、`src/db.json`、`src/actions.json`):本身就是租戶資料快照
   (表定義含真實 id、Data Reference 含快取資料列)。S1 抽取時自動改空殼,原件留 raw/。
 - **真實資料**:模板的 demo 資料必須是創作的(繁中、台灣在地化),不得沿用客戶資料——

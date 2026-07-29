@@ -4,6 +4,28 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.4.0
+
+- **鐵律 6 反轉:對外呼叫回到 `ctx.http.call` 閘道,不是 raw httpx。** 原規則
+  (0.1.x 起)依據「builder skill v1.1.0 移除 `ctx.http.call` 記述」推論該路徑已廢,
+  但那是**另一份 skill 的文件改動**,不是平台能力下架。實測(2026-07-28,
+  Developer 平台 prod 沙箱):
+  - `ctx.http.call("openai", ...)` 成功回應 3/3(aigo-finance-os / -management-core / -people-os)
+  - raw `httpx.get(...)` **20 秒 timeout**——runner pod 是 default-deny egress
+    (ADR-0003:SG 只放行 ctx-only service),連線被黑洞
+  raw httpx 產出的模板因此**測不過沙箱**,而送審門檻要求每支 enabled action 至少
+  一次 success,等於卡死在 S7。
+- **新增:憑證不可自帶 `Authorization` header。** 即使用了 `ctx.http.call`,自組
+  `headers={"Authorization": ...}` 也會被剝掉(AI GO `connector_proxy._sanitize_headers`、
+  Developer 平台 `dev_ctx._STRIPPED` 兩邊都剝),實測回 **401**。金鑰歸 EgressService,
+  action 不碰,連帶不需要為它開 `setup_schema` 欄位。此缺陷已實際流出:
+  上述 3 支模板皆為此寫法,沙箱與正式環境都無法認證。
+- `config/scan_rules.json`:`legacy_ctx_http`(把 `ctx.http.call` 當污染)→
+  `raw_http_outbound`(把 `import httpx/requests/urllib.request` 當污染),
+  suggestion 改為 `ctx.http.call` + `required_egress` + 不自帶憑證。
+- `SKILL.md` Phase 3 範例、`references/pollution-signals.md` 同步改寫;
+  「安裝後設定清單」的 egress 條目改以 slug 為主、網域為輔。
+
 ## 0.3.4
 
 - 對照平台 PR #35–#39:契約零變動,skill 程式無需更新。

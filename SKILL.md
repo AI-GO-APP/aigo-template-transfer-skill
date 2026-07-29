@@ -40,9 +40,15 @@ python scripts/check_update.py     # macOS / Linux 用 python3
    不讀、不轉、不輸出。掃到舊制 API(`ctx.db.*_object`)一律改寫為新制。
 5. **C 層不做。** 非 custom app(獨立 Next.js/Express/Flutter 等)不進本流程;
    轉換它們等於重寫,直接向用戶說明排除。
-6. **對外呼叫一律 httpx。** action 呼叫第三方 API 的正解是 `import httpx` +
-   `ctx.secrets.get()` + 強制 `timeout=`(builder skill v1.1.0 起 `ctx.http.call`
-   已移除記述);目標網域記入「安裝後設定清單」(租戶 Egress 白名單)。
+6. **對外呼叫一律走 egress 閘道 `ctx.http.call`。** action 呼叫第三方 API 的正解是
+   `ctx.http.call("<egress-slug>", "<path>", method=..., body=...)`,並在
+   `_template_meta.json` 的 `required_egress` 宣告該 slug(normalize_meta.py 會自動補)。
+   **憑證不可自帶**:`Authorization` header 會被閘道剝掉(AI GO `connector_proxy._sanitize_headers`
+   與 Developer 平台 `dev_ctx._STRIPPED` 兩邊都剝),金鑰由租戶註冊 EgressService 時填入、
+   閘道注入;action 端不碰金鑰,故也不需要為它開 `setup_schema` 欄位。
+   **`import httpx` 打不出去**:runner pod 是 default-deny egress(ADR-0003,SG 只放行
+   ctx-only service),raw httpx/requests 會直接 timeout——沙箱測不過,而送審門檻要求
+   每支 enabled action 至少一次 success,等於卡死。
 7. **憑證紀律。** 密碼只存在 `.env`(gitignored)且由**用戶本人**填寫;agent 不代填、
    不在對話中詢問密碼、不把密碼放進指令列。用戶若在對話貼出密碼,提醒改填 `.env` 並更換。
 8. **出錯先查表。** 任何失敗先讀原始 error message 再查
@@ -132,21 +138,27 @@ python scripts/apply_decisions.py --slug <slug>           # 套用 + 複掃收�
 參數化時同步規劃 setup_schema:key 命名通用化(例:`LINE_CHANNEL_ACCESS_TOKEN`,
 不要 `URFIT_LINE_TOKEN`),Phase 4 後由 normalize_meta 寫入 meta。
 
-改寫對外呼叫時遵守鐵律 6:`ctx.http.call/fetch` 與硬編碼第三方端點一律改為
+改寫對外呼叫時遵守鐵律 6:硬編碼第三方端點與 raw httpx/requests 一律改為 `ctx.http.call`
 
 ```python
-import httpx
-
 def execute(ctx):
-    resp = httpx.post(
-        "https://api.example.com/v1/send",
-        headers={"Authorization": f"Bearer {ctx.secrets.get('EXAMPLE_API_KEY')}"},
-        json={"text": ctx.params.get("text")},
-        timeout=30,
+    # service slug 對應租戶註冊的 EgressService(base_url + 憑證都在那裡);
+    # 這裡只寫 slug 與 path,不碰金鑰、不自帶 Authorization(閘道會剝掉)。
+    resp = ctx.http.call(
+        "example-api",
+        "/v1/send",
+        method="POST",
+        body={"text": ctx.params.get("text")},
     )
-    resp.raise_for_status()
-    ctx.response.json(resp.json())
+    if int(resp.get("status") or 500) >= 400:
+        ctx.response.json({"error": "外部服務暫時無法使用", "status": resp.get("status")})
+        return
+    ctx.response.json(resp.get("data") or {})
 ```
+
+slug 記入「安裝後設定清單」:租戶要在後台 `/dashboard/settings/integrations` 以**同名 slug**
+註冊 EgressService(填 base_url 與該租戶自己的金鑰),否則 action 連不出去——這是設定問題,
+改 code 改不掉。`required_egress` 宣告會讓安裝流程主動提示租戶完成這一步。
 
 webhook / 排程觸發的 action 改寫時**必須保持冪等**(平台 at-least-once,可能重複執行);
 去重 key 優先用事件本身的業務 id,其次 `ctx.params["delivery_id"]`。
