@@ -4,6 +4,56 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.6.0
+
+補上三處「錯了也不會有錯誤訊息」的缺口:抽錯 app、憑證問題延到 S1 才爆、
+AI 自行拍板模板門面文案。外加 repo URL 直接當來源。
+
+### 新增:來源側預檢 `aigo_client.py whoami`
+
+Phase 0 先前只驗 Developer PAT,來源側(AI GO)憑證要拖到 S1 抽取到一半才爆,
+錯誤還混在抽取流程裡。新增 `GET /auth/me` 預檢,順帶檢查 `builder.access`——
+判定對齊平台 `require_permission`:`system.admin` 是萬能鑰匙,不可誤判成無權限。
+
+### 新增:來源 app 身分閘(S1 前置,人工)
+
+app uuid 打錯**不會 404、不會有任何警訊**,只會安靜地把別支 app 的內容做成模板。
+
+- `acquire.py --list-apps`:列租戶下可見的 custom app(slug/status/更新時間/uuid),
+  不進行抽取,純粹是找 uuid 用。
+- `transfer_cli.py confirm-source --slug <slug> --app <uuid_or_slug>`:對著平台**實際回傳**
+  的名稱/slug/uuid/檔數/action 列表確認,互動輸入 yes 才寫 `decided_by: "user"`。
+- `acquire.py --from-app` 先驗這道裁決存在(不必連線就能擋),再把抓回來的 app id
+  與用戶確認過的比對,不符即停。身分沒確認前不會動到既有的 `template/`。
+
+### 新增:repo URL 直接當來源
+
+`--from-repo` 現在同時吃本地路徑與 URL(https / ssh / scp 形式),URL 走
+`git clone --depth 1`(可 `--ref <branch|tag>`)到 `work/<slug>/src_repo/`,
+狀態機記下 commit 短碼。認證交給 git 本身;URL 若含 userinfo,輸出、錯誤訊息與
+狀態檔一律遮掉,避免 token 隨 log 外流。找不到 git、clone 失敗、逾時各有明確處置指引。
+
+> 範圍不變(鐵律 5):只吃 custom app 形狀的 repo。一般 web app clone 得下來也過不了
+> 形狀檢查——那是重寫,不是轉換。
+
+### 新增:meta 人工閘(S6 前置)
+
+name / description / category / tags / long_description 是上架後第三方唯一看得到的門面,
+先前全由 AI 以 CLI 參數填,decisions.json 不留任何用戶確認紀錄。
+
+- `normalize_meta.py` 寫檔後把內容登記為 `decided_by: "proposed"`;
+  內容與既有用戶確認**逐位元組相同**時沿用原確認(同參數重跑不必重按)。
+- `transfer_cli.py confirm-meta`:呈報全部欄位與 long_description 全文後互動確認。
+- `audit_local.py` 新增「meta 人工閘」項:未確認、或確認後又被改過(雜湊不符)都擋下 S6,
+  連帶擋住 S7 push。
+
+### 其他
+
+- 人工閘統一走 `transfer_cli.confirm()`:非互動環境讀到 EOF 回明確的 `[ABORT]`
+  訊息(「此步驟必須由用戶親自執行」),不再拋 traceback 讓人誤以為程式壞了。
+- 新增 23 例測試(URL 判定與憑證遮罩、真實 clone 與失敗路徑、身分閘四種情境、
+  builder.access 判定含 system.admin、meta 閘六種情境)。
+
 ## 0.5.1
 
 ### 修正:e2e 表 CRUD 打錯端點面(帶自建表的模板 S8 必然失敗)

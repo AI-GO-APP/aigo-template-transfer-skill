@@ -29,6 +29,7 @@ CATEGORIES = {
     "ai", "operations", "productivity", "analytics",
 }
 ACCESS_MODES = {"internal", "external", "self_built"}
+META_DECISION_KEY = "meta"
 
 
 def refresh_inventory(work, template) -> dict:
@@ -81,6 +82,24 @@ def build_post_install_checklist(work, meta: dict) -> str:
     if not lines:
         return ""
     return "## 安裝後設定\n\n" + "\n".join(lines)
+
+
+def record_meta_proposal(work: Path, template: Path) -> bool:
+    """把這次寫出的 meta 登記為待用戶確認的提議(decided_by="proposed")。
+
+    回傳「是否還需要用戶確認」。內容與既有的用戶確認完全一致時保留該確認——
+    同樣參數重跑不該讓用戶再按一次;只要有一個字不同就退回 proposed。"""
+    meta_hash = common.file_hash(template / "_template_meta.json")
+    decisions = common.load_decisions(work)
+    entry = decisions.get(META_DECISION_KEY)
+    if isinstance(entry, dict) and entry.get("decided_by") == "user" \
+            and entry.get("meta_hash") == meta_hash:
+        return False
+    decisions[META_DECISION_KEY] = {
+        "meta_hash": meta_hash, "decided_by": "proposed", "at": common._now(),
+    }
+    common.save_decisions(work, decisions)
+    return True
 
 
 def main() -> None:
@@ -197,7 +216,13 @@ def main() -> None:
     common.dump_json(template / "_template_meta.json", meta)
     common.refresh_hash(work, state)
     print(f"[OK] 已寫入 {template / '_template_meta.json'}")
-    print("下一步:python scripts/audit_local.py --slug", args.slug)
+
+    if record_meta_proposal(work, template):
+        print("下一步(人工閘,由用戶執行):"
+              f"python scripts/transfer_cli.py confirm-meta --slug {args.slug}")
+    else:
+        print("meta 內容與用戶先前確認過的一致,不必重新確認。")
+        print("下一步:python scripts/audit_local.py --slug", args.slug)
 
 
 if __name__ == "__main__":

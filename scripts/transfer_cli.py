@@ -8,7 +8,12 @@
     python scripts/transfer_cli.py gate --slug my_template --stage S5 --decision approved
     python scripts/transfer_cli.py reset --slug my_template --from-stage S2
 
-人工閘(gate)一律互動確認:必須在終端機輸入 yes 才會寫入 decided_by="user"。
+    # S1 前:確認來源 app 身分(uuid 打錯不會報錯,只會安靜地抽走別支 app)
+    python scripts/transfer_cli.py confirm-source --slug my_template --app <uuid_or_slug>
+    # S6 前:確認模板門面文案(name/description/category/長描述都是上架給第三方看的)
+    python scripts/transfer_cli.py confirm-meta --slug my_template
+
+人工閘(gate / confirm-*)一律互動確認:必須在終端機輸入 yes 才會寫入 decided_by="user"。
 這是刻意設計——AI 代理無法在非互動環境替用戶按下確認。
 """
 import argparse
@@ -75,9 +80,7 @@ def cmd_gate(args) -> None:
     print(f"  裁決:{args.decision}")
     if args.notes:
         print(f"  備註:{args.notes}")
-    answer = input("確認以上裁決?(輸入 yes 確認)")
-    if answer.strip().lower() != "yes":
-        raise SystemExit("[ABORT] 未確認,不寫入。")
+    confirm("確認以上裁決?(輸入 yes 確認)")
 
     decisions = common.load_decisions(work)
     decisions[decision_key] = {
@@ -95,6 +98,96 @@ def cmd_gate(args) -> None:
     status = "skipped" if args.decision == "skipped" else "passed"
     common.mark_stage(work, state, stage_key, status, decision=args.decision)
     print(f"[OK] {stage_key} → {status}")
+
+
+def confirm(prompt: str = "確認?(輸入 yes 確認)") -> None:
+    """人工閘的唯一入口。非互動環境(agent 直接跑)讀到 EOF 一律當未確認——
+    這裡拋 traceback 會讓人以為是程式壞了,實際上是這步本來就該由用戶親自執行。"""
+    try:
+        answer = input(prompt)
+    except EOFError:
+        raise SystemExit("[ABORT] 非互動環境無法確認;此步驟必須由用戶在終端機親自執行。")
+    if answer.strip().lower() != "yes":
+        raise SystemExit("[ABORT] 未確認,不寫入。")
+
+
+def cmd_confirm_source(args) -> None:
+    """來源 app 身分閘(S1 前置)。
+
+    抽取線上 app 只要 uuid 打錯就會安靜地轉走另一支 app 的內容——不會 404、
+    不會有任何警訊,直到上架才發現。故身分由用戶親自對著平台回來的資料確認。
+    """
+    import acquire  # 延後 import:只有這條路徑需要 AI GO 連線
+
+    work = common.work_dir(args.slug)
+    common.load_state(work)  # 工作區必須已 init
+    env = common.load_env()
+    app_info = acquire.fetch_app_vfs(env, args.app)
+
+    print("來源 app(平台回傳的實際資料):")
+    print(acquire.identity_card(app_info))
+    print("\n[!] 確認這就是你要轉成模板的那一支;抽錯 app 等於把別的客戶的內容做成模板。")
+    confirm("確認來源身分?(輸入 yes 確認)")
+
+    decisions = common.load_decisions(work)
+    decisions[acquire.SOURCE_DECISION_KEY] = {
+        "app_id": str(app_info.get("id") or ""),
+        "app_slug": app_info.get("slug"),
+        "app_name": app_info.get("name"),
+        "requested": args.app,
+        "decided_by": "user",
+        "at": common._now(),
+    }
+    common.save_decisions(work, decisions)
+    print(f"[OK] 已記錄來源身分。下一步:\n"
+          f"    python scripts/acquire.py --slug {args.slug} --from-app {app_info.get('id')}")
+
+
+def cmd_confirm_meta(args) -> None:
+    """模板 meta 人工閘(S6 前置)。
+
+    name / description / category / tags / 長描述是上架後第三方唯一看得到的東西,
+    由 AI 起草可以,但不能由 AI 拍板。確認綁定當下的檔案內容雜湊:meta 改過就要重確認。
+    """
+    work = common.work_dir(args.slug)
+    common.load_state(work)
+    meta_path = work / "template" / "_template_meta.json"
+    if not meta_path.exists():
+        raise SystemExit("[FAIL] 找不到 template/_template_meta.json;請先跑 normalize_meta.py")
+    meta = common.load_json(meta_path)
+
+    print("模板 meta(上架後第三方看到的門面):\n")
+    for key in ("slug", "name", "category", "version", "access_mode", "author", "icon_emoji"):
+        if meta.get(key):
+            print(f"  {key:<12}:{meta[key]}")
+    if meta.get("tags"):
+        print(f"  {'tags':<12}:{', '.join(meta['tags'])}")
+    print(f"  {'description':<12}:{meta.get('description')}")
+    for key, label in (("setup_schema", "安裝表單欄位"), ("required_egress", "需授權的外部服務")):
+        if meta.get(key):
+            print(f"  {label:<12}:{', '.join(sorted(meta[key]))}")
+    tables = [t.get("key") for t in (meta.get("data_center_schema") or {}).get("tables", [])
+              if isinstance(t, dict)]
+    if tables:
+        print(f"  {'自建表':<12}:{', '.join(str(t) for t in tables)}")
+    if meta.get("long_description"):
+        print("\n--- long_description(含安裝後設定清單)---")
+        print(meta["long_description"])
+        print("--- end ---")
+    print("\n[!] 逐項讀過再確認:文案錯字、殘留客戶名、category 選錯,上架後都要重送審。")
+    confirm("確認以上 meta?(輸入 yes 確認)")
+
+    decisions = common.load_decisions(work)
+    decisions["meta"] = {
+        "meta_hash": common.file_hash(meta_path),
+        "name": meta.get("name"),
+        "category": meta.get("category"),
+        "decided_by": "user",
+        "at": common._now(),
+    }
+    common.save_decisions(work, decisions)
+    print(f"[OK] 已記錄 meta 裁決。下一步:\n"
+          f"    python scripts/audit_local.py --slug {args.slug}")
 
 
 def cmd_reset(args) -> None:
@@ -127,6 +220,15 @@ def main() -> None:
     p.add_argument("--decision", required=True)
     p.add_argument("--notes", default="")
     p.set_defaults(func=cmd_gate)
+
+    p = sub.add_parser("confirm-source", help="確認來源 app 身分(S1 前置,人工)")
+    p.add_argument("--slug", required=True)
+    p.add_argument("--app", required=True, help="線上 custom app 的 uuid 或 slug")
+    p.set_defaults(func=cmd_confirm_source)
+
+    p = sub.add_parser("confirm-meta", help="確認模板 meta 門面文案(S6 前置,人工)")
+    p.add_argument("--slug", required=True)
+    p.set_defaults(func=cmd_confirm_meta)
 
     p = sub.add_parser("reset", help="重置某階段(含)之後的狀態")
     p.add_argument("--slug", required=True)
