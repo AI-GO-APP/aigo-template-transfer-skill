@@ -171,6 +171,14 @@ def content_hash(work: Path) -> str | None:
     return h.hexdigest()
 
 
+def file_hash(path: Path) -> str | None:
+    """單檔內容雜湊;檔案不存在回 None。
+    用於把人工裁決綁定到當下的檔案內容(meta 人工閘:確認過的必須就是要推的那份)。"""
+    if not path.exists():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def require_stage(work: Path, stage: str, *, optional_ok: tuple[str, ...] = (),
                   allow_content_change: bool = False) -> dict:
     """閘:跑 stage 前確認所有前置階段 passed(或列於 optional_ok 且 skipped),

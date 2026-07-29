@@ -21,13 +21,19 @@
 |---|---|---|
 | 「階段閘:S_x 尚未通過」 | 跳關 | 依序補完前置階段;人工閘用 `transfer_cli.py gate` |
 | 「內容閘:雜湊不符」 | template/ 有閘外變更 | 找出變更來源;合法變更 → `reset --from-stage <變更點>` 重跑;不明變更 → 先查是誰改的 |
-| S1 偵測不到佈局 | B 層自開發佈局 | `--vfs-subdir` 或 `--mapping` 檔;完全非 custom app(C 層)→ 排除,不硬轉 |
+| S1「尚未確認來源 app 的身分」 | 未過來源身分閘 | `acquire.py --list-apps` 找出 uuid → **由用戶**跑 `transfer_cli.py confirm-source`;AI 不得代按 |
+| S1「來源身分不符」 | `--from-app` 給的不是用戶確認過的那支 | 核對 uuid;確實要換來源就重跑 `confirm-source` 重新確認 |
+| S1 clone 失敗(private repo) | git 認證未設 | `gh auth login` / SSH key / credential helper;**不要把 token 寫進 URL**(會留在 shell 歷史) |
+| S1 clone 失敗(找不到分支) | 預設分支不是要的那條 | `--ref <branch|tag>` 指定 |
+| S1 偵測不到佈局 | B 層自開發佈局;或根本不是 custom app | `--vfs-subdir` 或 `--mapping` 檔;完全非 custom app(C 層,一般 web app)→ 排除,不硬轉 |
 | S1 缺 SDK 檔 | 來源 repo 不完整 | 從 starter 模板補 canonical 三檔後 `reset --from-stage S1` |
 | S3「找不到 old 字串」 | 前一筆裁決已改掉同段內容 | 正常;確認複掃結果收斂即可 |
 | S3 blocker 不可 keep | 憑證/舊制 API/禁用 import | 只能 replace 或 delete_file;舊制 API 改寫對照見 template-contract.md |
 | S4 403 | 資料中心存取權 | 見上表 403;本 skill 只讀不建表,不需要 system.admin |
 | S6 DSL 驗證失敗 | 系統欄名/relation/成環 | 錯誤訊息含位置,對照 template-contract.md 修 dc_schema |
 | S6 secrets 覆蓋失敗 | `ctx.secrets.get` 的 key 未宣告 | 補進 setup_schema(經 normalize_meta --setup-schema),不要刪程式碼裡的讀取 |
+| S6「meta 尚未經用戶確認」 | 門面文案是人工閘 | 向用戶完整呈報 meta(含 long_description 全文)後,**由用戶**跑 `transfer_cli.py confirm-meta` |
+| S6「meta 在用戶確認後又被改過」 | 確認後 meta 又變動(重跑 normalize_meta 或手改) | 重新呈報差異並請用戶重跑 `confirm-meta`;內容完全相同時腳本會自動沿用原確認 |
 | S7 preflight fail | entry/imports/secrets/scopes/actions/manifest | 讀 issues 逐條修;bare import 只支援 5 套件,別加第三方前端依賴 |
 | S7 tags 422 | tags 不在平台白名單 | `GET /refs/tags` 取合法值 |
 | S7 寫後回讀不符 | 平台改寫/丟棄欄位 | 人工比對送出與回讀內容;確認平台版本行為後回報 |

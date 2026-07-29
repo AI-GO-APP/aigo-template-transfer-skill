@@ -7,10 +7,14 @@
 ## 特性
 
 - **嚴謹的每階段判斷**:S0–S9 十階段狀態機,腳本強制順序;內容雜湊閘擋下任何閘外變更;
-  人工裁決(候選判定、逐條去租戶化、挑表、demo 資料、送審)必須由用戶親自確認,AI 不得代填。
+  人工裁決(候選判定、**來源 app 身分**、逐條去租戶化、挑表、demo 資料、**meta 門面文案**、
+  送審)必須由用戶親自確認,AI 不得代填。
 - **可重現**:所有修改由 decisions.json 驅動、`apply_decisions.py` 套用——同一份裁決重跑得到同一份模板。
+- **兩種來源皆可**:線上 custom app(`--list-apps` 找 uuid → 用戶確認身分 → 抽 `vfs_state`)、
+  repo(本地路徑或 URL,URL 走 `git clone --depth 1`;認證交給 git,不吃 URL 內的 token)。
 - **相容標準 VFS 與自開發佈局**:A 層(標準形)自動偵測;B 層(`app/`、`vfs/`、`aigo/`、
   `aigo-app/`、多 app)依 layout profiles;完全自訂佈局用 mapping 檔。
+  非 custom app 的一般 web app 不在範圍內(轉換它們等於重寫)。
 - **一律新制**:只產 `data_center_schema`(version=1),舊制 CustomObject 不讀不轉,
   掃到舊 API 一律要求改寫。
 - **Developer 平台整合**:PAT 引導設置、建模組推草稿、平台 preflight、沙箱 secrets/CRUD/actions
@@ -68,6 +72,7 @@ python scripts/check_update.py --apply   # git 安裝:就地 pull --ff-only
 python scripts/devportal.py setup              # 產生 .env + PAT 引導
 python scripts/devportal.py set-pat            # 貼入 PAT
 # 用戶本人在 .env 填 AIGO_EMAIL / AIGO_PASSWORD(來源側,builder.access)
+python scripts/aigo_client.py whoami           # 來源側預檢(抽線上 app 才需要)
 python scripts/transfer_cli.py init --slug my_template
 ```
 
@@ -76,12 +81,12 @@ python scripts/transfer_cli.py init --slug my_template
 | 階段 | 內容 | 執行 |
 |---|---|---|
 | S0 | 候選判定(new/merge/exclude) | `transfer_cli.py gate --stage S0`(人工) |
-| S1 | 抽取正規化 | `acquire.py --from-app / --from-repo` |
+| S1 | 抽取正規化 | `acquire.py --list-apps` → `confirm-source`(人工)→ `acquire.py --from-app`;或 `--from-repo <路徑或 URL>` |
 | S2 | 污染掃描(只報告) | `scan.py` |
 | S3 | 去租戶化(逐條裁決→套用) | `apply_decisions.py`(人工裁決) |
 | S4 | Data Center schema | `dc_extract.py --tables ...`(人工挑表) |
 | S5 | demo 資料 | 起草 + `gate --stage S5`(人工) |
-| S6 | 本地 audit 硬閘 | `normalize_meta.py` + `audit_local.py` |
+| S6 | 本地 audit 硬閘 | `normalize_meta.py` → `confirm-meta`(人工)→ `audit_local.py` |
 | S7 | Developer 建草稿 + preflight(寫後回讀) | `devportal.py push` |
 | S8 | 沙箱端到端測試(`--quick`/full 兩檔) | `e2e_devportal.py` |
 | S9 | 送審(要求最後一次 e2e 為 full) | `devportal.py submit`(人工確認) |

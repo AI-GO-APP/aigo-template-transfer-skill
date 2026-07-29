@@ -36,8 +36,10 @@ python scripts/check_update.py     # macOS / Linux 用 python3
    唯二例外:Phase 5 起草 `actions/seed_demo_data.py`(新檔,仍需用戶 gate 確認)、
    Phase 4 後由 `normalize_meta.py` 生成 `_template_meta.json`。
 2. **人工閘不可代填。** decisions.json 內 `decided_by: "user"` 的紀錄只能在用戶明確確認後寫入;
-   `transfer_cli.py gate` 與 `devportal.py submit` 的互動確認必須由用戶親自輸入。
-   AI 的提議一律先以 `decided_by: "proposed"` 呈現給用戶。
+   `transfer_cli.py gate` / `confirm-source` / `confirm-meta` 與 `devportal.py submit`(及
+   `adopt`)的互動確認必須由用戶親自輸入。AI 的提議一律先以 `decided_by: "proposed"` 呈現給用戶。
+   人工閘共六道:S0 候選判定、**S1 前來源身分**、S3 逐條裁決、S5 demo 資料、
+   **S6 前 meta 門面文案**、S9 送審。
 3. **階段不可跳。** 狀態機(S0→S9)由腳本強制;內容雜湊閘會擋下任何閘外變更。
 4. **一律新制。** 只產 `data_center_schema`(version=1);舊制 custom_objects_schema
    不讀、不轉、不輸出。掃到舊制 API(`ctx.db.*_object`)一律改寫為新制。
@@ -60,7 +62,8 @@ python scripts/check_update.py     # macOS / Linux 用 python3
 ## Phase 0:前置檢查(每次開工先跑)
 
 ```bash
-python scripts/devportal.py whoami
+python scripts/devportal.py whoami      # 目的地側:Developer 平台 PAT 與權限
+python scripts/aigo_client.py whoami    # 來源側:AI GO 帳號與 builder.access(抽線上 app 才需要)
 ```
 
 - 失敗或無 PAT → `python scripts/devportal.py setup` 依指引引導用戶:
@@ -72,6 +75,9 @@ python scripts/devportal.py whoami
   `AIGO_PASSWORD`(或 `AIGO_TOKEN`)。`aigo_client.get_token()` 會走
   「token 快取 → refresh 換發 → 帳密登入」,正常情況全程無感;
   拋 RuntimeError 時把訊息原樣轉給用戶(內含設定指引)。
+  **在這裡把憑證問題解決掉**——不然它會在 S1 抽到一半才爆,錯誤混在抽取流程裡更難判讀。
+  缺 `builder.access` 是權限設定問題,請租戶管理員授予,不要改 code 繞路
+  (只有純 repo 來源的轉換用不到來源側憑證,可跳過這支)。
 
 ## Phase 0.5:候選判定(S0,人工閘)
 
@@ -101,14 +107,36 @@ access_mode 建立後不可改,先想清楚。
 
 ## Phase 1:抽取正規化(S1)
 
+**線上 app:先確認身分再抽**(人工閘)。app uuid 打錯不會 404、不會有任何警訊,
+只會安靜地把**別支 app** 的內容做成模板,通常到上架才發現:
+
 ```bash
-# 線上 app
-python scripts/acquire.py --slug <slug> --from-app <app_id_or_slug>
-# 本地 repo(A 層自動偵測;B 層 vfs/ aigo/ app/ 依 profiles;多 app 加 --vfs-subdir)
+python scripts/acquire.py --list-apps                 # 列租戶下的 app(slug/status/更新時間/uuid)
+# ↓ 由用戶執行:對著平台回傳的名稱、slug、uuid、檔數確認「就是這一支」
+python scripts/transfer_cli.py confirm-source --slug <slug> --app <uuid_or_slug>
+python scripts/acquire.py --slug <slug> --from-app <uuid_or_slug>
+```
+
+`acquire --from-app` 會先驗這道裁決存在,再把抓回來的 app id 與用戶確認過的比對;
+不符即停(要換來源就重跑 confirm-source)。
+
+**repo 來源:本地路徑或 URL 皆可**:
+
+```bash
 python scripts/acquire.py --slug <slug> --from-repo <path>
-# 全部偵測不中的自開發佈局:與用戶確認對映後提供 mapping 檔
+python scripts/acquire.py --slug <slug> --from-repo https://github.com/org/repo.git [--ref <branch|tag>]
+# 多 app 佈局加 --vfs-subdir;全部偵測不中的自開發佈局:與用戶確認對映後提供 mapping 檔
 python scripts/acquire.py --slug <slug> --from-repo <path> --mapping mapping.json
 ```
+
+URL 來源會 `git clone --depth 1` 到 `work/<slug>/src_repo/`(唯讀取用,不會推回去),
+狀態機記下 commit 短碼以利重現。**認證交給 git 本身**(gh auth login / SSH key /
+credential helper);不要把 token 寫進 URL——真寫了,腳本在輸出與狀態檔會把 userinfo
+遮掉,但它仍留在你的 shell 歷史裡。私有 repo 沒授權會 clone 失敗,依訊息設好認證再重跑。
+
+> **只吃 custom app 形狀的 repo**(鐵律 5):偵測 VFS 佈局要看到 `src/main.tsx`
+> 或 `src/App.tsx`。一般 web app(獨立 Next.js/Express/Flutter)clone 得下來也過不了
+> 形狀檢查——那是重寫,不是轉換,直接向用戶說明排除。
 
 INJ 三檔(data.json/db.json/actions.json)自動改空殼,原件在 `work/<slug>/raw/` 供 Phase 4 參考。
 形狀檢查失敗(缺 entry / SDK 檔)→ 與用戶討論;缺 SDK 檔可從 starter 模板補 canonical 版本
@@ -211,12 +239,19 @@ python scripts/transfer_cli.py gate --slug <slug> --stage S5 --decision skipped 
 ```bash
 python scripts/normalize_meta.py --slug <slug> --name "<名稱>" --category <cat> \
     --description "<一句話>" --author "<作者>" [--setup-schema setup.json] [--tags a,b]
+# ↓ 人工閘,由用戶執行:逐項讀過 meta 才放行(AI 可以起草,不能拍板)
+python scripts/transfer_cli.py confirm-meta --slug <slug>
 python scripts/audit_local.py --slug <slug> [--ai-go-backend <path>]
 ```
 
 - normalize_meta 會以最終內容重盤 inventory:自動生成「安裝後設定清單」入
   long_description,並把殘留的 `ctx.http.call(slug)` 自動宣告進 `required_egress`
   (缺宣告 = 租戶安裝不被提示授權,裝了也跑不動)。
+- **meta 人工閘**:name / description / category / tags / long_description 是上架後
+  第三方唯一看得到的門面,錯字、殘留客戶名、category 選錯都要重送審。audit 的
+  「meta 人工閘」項會擋到用戶確認為止;裁決綁定檔案雜湊——**確認後 meta 再被改過就要重確認**
+  (重跑 normalize_meta 產出完全相同的內容則沿用原確認,不必重按)。
+  向用戶呈報時把 long_description 全文帶上,別只報欄位名。
 - `--ai-go-backend` 建議指向 **ai-go-developer** repo(ctx-core 的 DSL parser 零相依,
   且與平台「存檔即驗」跑的是同一套);指向 ai-go 亦可(需該 repo 相依套件)。
 - `actions/_shared/**.py` 共用模組不要求 `execute(ctx)`(audit 已豁免)。
@@ -318,7 +353,8 @@ submit 內建寫後回讀:確認版本狀態已轉 `submitted`。
 
 ```
 每次改動 template 內容(回 Phase 3 補裁決後):
-  scan 複掃 → apply_decisions → audit_local → push → e2e --quick
+  scan 複掃 → apply_decisions → (meta 有動則 normalize_meta → confirm-meta)
+  → audit_local → push → e2e --quick
 里程碑 / 送審前:
   audit_local 全綠 → push(寫後回讀)→ e2e full(actions + 冪等 + test 事件)
   → 摘報 e2e_report + 安裝後設定清單 → 用戶 submit

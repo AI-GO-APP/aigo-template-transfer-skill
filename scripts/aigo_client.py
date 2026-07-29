@@ -1,16 +1,21 @@
 """AI GO(來源側)認證與 API 客戶端。
 
+    python scripts/aigo_client.py whoami    # Phase 0:來源側憑證與權限預檢
+
 憑證紀律對齊 aigo-app-builder-skill v1.1.x 的 aigo_auth.py:
 - Agent 絕不在對話中向用戶要密碼、絕不代填;憑證一律由用戶自己寫進 .env。
 - Token 取得順序:AIGO_TOKEN 環境變數/.env > 未過期快取 > refresh_token 換發 >
   .env 帳密登入。全部失敗 → 拋 RuntimeError,訊息內含設定指引,原樣轉給用戶。
 - Token 快取在 .aigo/token.json(已被 .gitignore),密碼不進指令列與 log。
 """
+import argparse
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common
 
 CACHE_DIR = common.REPO_ROOT / ".aigo"
@@ -98,3 +103,55 @@ def api(env: dict, method: str, path: str, body=None) -> tuple[int, dict]:
         CACHE_FILE.unlink(missing_ok=True)
         status, payload = common.http_call(method, url, body=body, token=get_token(env))
     return status, payload
+
+
+# ── Phase 0 預檢 ────────────────────────────────────────────────
+
+BUILDER_PERMISSION = "builder.access"
+ADMIN_PERMISSION = "system.admin"  # 平台 require_permission 的萬能鑰匙(同租戶內)
+
+
+def has_builder_access(me: dict) -> bool:
+    """對齊 ai-go `require_permission("builder.access")`:system.admin 直接放行。"""
+    perms = set(me.get("permissions") or [])
+    return ADMIN_PERMISSION in perms or BUILDER_PERMISSION in perms
+
+
+def whoami(env: dict | None = None) -> dict:
+    """GET /auth/me。失敗拋 RuntimeError(訊息原樣轉給用戶,不要自行推測修法)。"""
+    env = env or common.load_env()
+    status, me = api(env, "GET", "auth/me")
+    if status != 200:
+        raise RuntimeError(f"AI GO /auth/me 失敗(HTTP {status}):{me.get('detail', me)}。"
+                           f"401 代表憑證失效(重設 .env 或刪掉 .aigo/token.json 重登),"
+                           f"403 代表權限不足(請租戶管理員處理,不要繞路)。")
+    return me
+
+
+def cmd_whoami() -> int:
+    try:
+        me = whoami()
+    except RuntimeError as e:
+        print(f"[FAIL] {e}")
+        return 1
+    tenant = me.get("tenant_name") or me.get("tenant_id") or "?"
+    print(f"{me.get('email')}  租戶={tenant}  member={me.get('name') or '-'}")
+    if not has_builder_access(me):
+        print(f"[FAIL] 此帳號缺少 {BUILDER_PERMISSION} 權限,無法讀取 custom app 的 vfs_state。"
+              f"\n       請租戶管理員在後台授予後重試——這是權限設定問題,改 code 改不掉。")
+        return 1
+    print(f"[OK] 來源側就緒(具備 {BUILDER_PERMISSION})")
+    return 0
+
+
+def main() -> None:
+    common.utf8_stdout()
+    parser = argparse.ArgumentParser(description="AI GO 來源側憑證檢查")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("whoami", help="驗證 .env 憑證與 builder.access 權限")
+    parser.parse_args()
+    raise SystemExit(cmd_whoami())
+
+
+if __name__ == "__main__":
+    main()

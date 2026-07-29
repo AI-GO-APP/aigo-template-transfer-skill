@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """S1 抽取正規化:從線上 app 或本地 repo 取得 VFS,落成 work/<slug>/template/ 標準佈局。
 
-    # 線上 custom app(AIGO_TOKEN 環境變數,或 AIGO_EMAIL + 互動輸入密碼)
+    # 線上 custom app:先列出租戶下的 app 找出 uuid,再由用戶確認身分,最後才抽取
+    python scripts/acquire.py --list-apps
+    python scripts/transfer_cli.py confirm-source --slug my_template --app <uuid_or_slug>
     python scripts/acquire.py --slug my_template --from-app <app_id_or_slug>
 
-    # 本地 repo(A 層標準佈局自動偵測;B 層依 layout_profiles 偵測)
+    # repo(本地路徑或 URL;A 層標準佈局自動偵測,B 層依 layout_profiles 偵測)
     python scripts/acquire.py --slug my_template --from-repo <path>
+    python scripts/acquire.py --slug my_template --from-repo https://github.com/org/repo.git
     python scripts/acquire.py --slug my_template --from-repo <path> --vfs-subdir admin
     python scripts/acquire.py --slug my_template --from-repo <path> --mapping mapping.json
 
@@ -21,12 +24,15 @@ import argparse
 import json
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import aigo_client
 import common
+
+SOURCE_DECISION_KEY = "source_app"
 
 _URL_RE = re.compile(r"https?://([A-Za-z0-9.\-]+)")
 _EGRESS_SLUG_RE = re.compile(r"ctx\.http\.(?:call|fetch)\s*\(\s*['\"]([^'\"\n]+)['\"]")
@@ -63,6 +69,122 @@ def fetch_app_vfs(env: dict, app_id: str) -> dict:
     if status != 200:
         raise SystemExit(f"[FAIL] 取得 app 失敗(HTTP {status}):{app_info.get('detail', app_info)}")
     return app_info
+
+
+def list_apps(env: dict) -> None:
+    """列出租戶下的 custom app,供用戶找出正確的 app uuid。
+
+    平台以 `updated_at desc` 排序並做可見度過濾,故這裡看到的就是此帳號能抽的全部。"""
+    try:
+        status, payload = aigo_client.api(env, "GET", "builder/apps")
+    except RuntimeError as e:
+        raise SystemExit(f"[FAIL] {e}")
+    if status != 200:
+        raise SystemExit(f"[FAIL] 列出 app 失敗(HTTP {status}):"
+                         f"{payload.get('detail', payload) if isinstance(payload, dict) else payload}")
+    items = payload if isinstance(payload, list) else payload.get("items", [])
+    print(f"租戶下可見的 custom app 共 {len(items)} 支(新到舊):\n")
+    print(f"  {'slug':<28} {'status':<10} {'access_mode':<10} {'updated_at':<21} name / id")
+    for app in items:
+        if not isinstance(app, dict):
+            continue
+        print(f"  {str(app.get('slug') or '-'):<28} {str(app.get('status') or '-'):<10} "
+              f"{str(app.get('access_mode') or '-'):<10} "
+              f"{str(app.get('updated_at') or '-')[:19]:<21} "
+              f"{app.get('name', '')}  {app.get('id')}")
+    print("\n下一步(由用戶確認來源身分,uuid 打錯會轉到別支 app):")
+    print("  python scripts/transfer_cli.py confirm-source --slug <slug> --app <uuid_or_slug>")
+
+
+def identity_card(app_info: dict) -> str:
+    """把 app 身分整理成給用戶過目的摘要——確認閘要看的就是這幾行。"""
+    vfs = app_info.get("vfs_state") or {}
+    actions = sorted({k.split("/")[1] for k in vfs
+                      if k.lstrip("/").startswith("actions/") and k.endswith(".py")})
+    lines = [
+        f"  名稱      :{app_info.get('name')}",
+        f"  slug      :{app_info.get('slug')}",
+        f"  id (uuid) :{app_info.get('id')}",
+        f"  子網域    :{app_info.get('subdomain') or '-'}",
+        f"  狀態      :{app_info.get('status')}  access_mode={app_info.get('access_mode')}",
+        f"  最後更新  :{str(app_info.get('updated_at') or '-')[:19]}",
+        f"  VFS       :{len(vfs)} 檔;actions {len(actions)} 支"
+        + (f"({', '.join(actions[:8])}{' …' if len(actions) > 8 else ''})" if actions else ""),
+    ]
+    return "\n".join(lines)
+
+
+def require_source_decision(work: Path, slug: str) -> dict:
+    """來源身分閘:抽取線上 app 前,用戶必須先確認過「是這一支」。
+    先驗裁決存在再連線——憑證/網路都正常但抽錯 app,是最貴的錯。"""
+    entry = common.load_decisions(work).get(SOURCE_DECISION_KEY)
+    if not isinstance(entry, dict) or entry.get("decided_by") != "user":
+        raise SystemExit(
+            "[FAIL] 人工閘:尚未確認來源 app 的身分(decisions.json 缺 source_app)。\n"
+            "       app uuid 打錯不會報錯,只會安靜地轉走另一支 app 的內容,故必須由用戶親自確認:\n"
+            f"       python scripts/acquire.py --list-apps            # 先找出正確的 uuid\n"
+            f"       python scripts/transfer_cli.py confirm-source --slug {slug} --app <uuid_or_slug>")
+    return entry
+
+
+def verify_source_identity(entry: dict, app_info: dict) -> None:
+    """比對「用戶確認過的那支」與「這次真的抓到的那支」是否同一支。"""
+    confirmed = str(entry.get("app_id") or "")
+    fetched = str(app_info.get("id") or "")
+    if confirmed != fetched:
+        raise SystemExit(
+            f"[FAIL] 來源身分不符:用戶確認的是 {entry.get('app_slug')}({confirmed}),"
+            f"這次抓到的是 {app_info.get('slug')}({fetched})。\n"
+            f"       若確實要換來源,請重跑 confirm-source 重新確認。")
+
+
+# ── repo URL 來源 ──────────────────────────────────────────────
+
+_CRED_IN_URL_RE = re.compile(r"(https?://)[^/\s@]+@")
+_REPO_URL_RE = re.compile(
+    r"^(?:https?://|git://|ssh://|git\+ssh://|[A-Za-z0-9_.\-]+@[A-Za-z0-9_.\-]+:)")
+
+CLONE_HELP = """clone 失敗的常見原因與處置:
+- private repo 未授權:先設好 git 認證(gh auth login / SSH key / credential helper)再重跑。
+  **不要把 token 寫進 URL**——它會留在 shell 歷史與 log 裡。
+- 分支或標籤不存在:用 --ref 指定正確的 branch/tag。
+- 網路或 proxy 擋住:確認本機可連到該主機。"""
+
+
+def is_repo_url(value: str) -> bool:
+    """判斷 --from-repo 給的是 URL 還是本地路徑。"""
+    return bool(_REPO_URL_RE.match((value or "").strip()))
+
+
+def redact(text: str) -> str:
+    """去掉 URL 裡的 userinfo(https://user:token@host/…),避免憑證進 log 與狀態檔。"""
+    return _CRED_IN_URL_RE.sub(r"\1", text or "")
+
+
+def clone_repo(url: str, dest: Path, ref: str | None) -> tuple[Path, str]:
+    """淺 clone 到 dest,回傳 (路徑, commit 短碼)。只讀取來源,不會推回去。"""
+    if shutil.which("git") is None:
+        raise SystemExit("[FAIL] 找不到 git,無法從 URL 取得 repo;請安裝 git 或改用本地路徑。")
+    safe = redact(url.strip())
+    _clear_dir(dest)
+    cmd = ["git", "clone", "--depth", "1"]
+    if ref:
+        cmd += ["--branch", ref]
+    cmd += [url.strip(), str(dest)]
+    print(f"[NOTE] clone {safe}{(' @' + ref) if ref else ''} → {dest}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=600)
+    except subprocess.TimeoutExpired:
+        raise SystemExit(f"[FAIL] git clone 逾時(600s):{safe}\n\n{CLONE_HELP}")
+    if proc.returncode != 0:
+        detail = redact((proc.stderr or proc.stdout or "").strip())[-800:]
+        raise SystemExit(f"[FAIL] git clone 失敗(returncode {proc.returncode}):\n{detail}\n\n{CLONE_HELP}")
+    rev = subprocess.run(["git", "-C", str(dest), "rev-parse", "HEAD"],
+                         capture_output=True, text=True, encoding="utf-8", errors="replace")
+    commit = rev.stdout.strip()[:12] if rev.returncode == 0 else "?"
+    print(f"[NOTE] clone 完成:commit {commit}")
+    return dest, commit
 
 
 def build_inventory(template: Path, env: dict, app_id: str | None) -> dict:
@@ -206,29 +328,61 @@ def shape_check(template: Path) -> list[str]:
 def main() -> None:
     common.utf8_stdout()
     parser = argparse.ArgumentParser(description="S1 抽取正規化")
-    parser.add_argument("--slug", required=True)
-    source = parser.add_mutually_exclusive_group(required=True)
+    parser.add_argument("--slug", help="工作區 slug(--list-apps 以外必填)")
+    source = parser.add_mutually_exclusive_group()
     source.add_argument("--from-app", help="線上 custom app 的 id 或 slug")
-    source.add_argument("--from-repo", help="本地 repo 路徑")
+    source.add_argument("--from-repo", help="repo 本地路徑或 URL")
+    source.add_argument("--list-apps", action="store_true",
+                        help="列出租戶下的 custom app(查 uuid 用,不進行抽取)")
+    parser.add_argument("--ref", help="repo URL 來源的 branch 或 tag")
     parser.add_argument("--vfs-subdir", help="多 app 佈局時指定子目錄")
     parser.add_argument("--mapping", help="自訂佈局對映 JSON 檔路徑")
     args = parser.parse_args()
+
+    if args.list_apps:
+        list_apps(common.load_env())
+        return
+    if not args.slug:
+        raise SystemExit("[FAIL] 缺少 --slug")
+    if not args.from_app and not args.from_repo:
+        raise SystemExit("[FAIL] 需指定 --from-app 或 --from-repo"
+                         "(不知道線上 app 的 uuid 就先跑 --list-apps)")
+    if args.ref and not (args.from_repo and is_repo_url(args.from_repo)):
+        raise SystemExit("[FAIL] --ref 只適用於 repo URL 來源")
 
     work = common.work_dir(args.slug)
     state = common.require_stage(work, "S1_acquire")
 
     template = work / "template"
     raw_dir = work / "raw"
-    _clear_dir(template)
-    raw_dir.mkdir(exist_ok=True)
-
     profiles_cfg = common.load_config("layout_profiles.json")
     exclude_dirs = set(profiles_cfg["exclude_dirs"])
     notes: list[str] = []
 
+    # 來源解析先做完(身分閘、clone)再動 template/——身分沒確認就把上一輪成果清掉最傷。
+    app_info: dict = {}
+    repo: Path | None = None
+    origin_desc = ""
     if args.from_app:
         env = common.load_env()
+        entry = require_source_decision(work, args.slug)
         app_info = fetch_app_vfs(env, args.from_app)
+        verify_source_identity(entry, app_info)
+        print(f"[OK] 來源身分已確認:{app_info.get('name')}({app_info.get('slug')})")
+    elif is_repo_url(args.from_repo):
+        repo, commit = clone_repo(args.from_repo, work / "src_repo", args.ref)
+        origin_desc = f"{redact(args.from_repo.strip())}@{commit}"
+    else:
+        repo = Path(args.from_repo).resolve()
+        if not repo.is_dir():
+            raise SystemExit(f"[FAIL] repo 路徑不存在:{repo}"
+                             f"(要從遠端取得請給完整 URL,例:https://github.com/org/repo.git)")
+        origin_desc = str(repo)
+
+    _clear_dir(template)
+    raw_dir.mkdir(exist_ok=True)
+
+    if args.from_app:
         vfs_state: dict[str, str] = app_info.get("vfs_state", {}) or {}
         if not vfs_state:
             raise SystemExit("[FAIL] app 的 vfs_state 為空")
@@ -256,12 +410,9 @@ def main() -> None:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(content, encoding="utf-8")
             count += 1
-        source_desc = f"app:{args.from_app}"
+        source_desc = f"app:{app_info.get('slug')}({app_info.get('id')})"
         profile_name = "online"
     else:
-        repo = Path(args.from_repo).resolve()
-        if not repo.is_dir():
-            raise SystemExit(f"[FAIL] repo 路徑不存在:{repo}")
         if args.mapping:
             mapping = common.load_json(Path(args.mapping))
             vfs_root = repo / mapping["vfs_root"]
@@ -302,7 +453,7 @@ def main() -> None:
                         shutil.copy2(candidate, dest)
                     notes.append(f"{meta_name}:收進 source_meta/,S6 前由 normalize_meta.py 重建")
                     break
-        source_desc = f"repo:{repo}"
+        source_desc = f"repo:{origin_desc}"
 
     problems = shape_check(template)
     for note in notes:
@@ -316,7 +467,7 @@ def main() -> None:
 
     # 盤點不隨 VFS 走的資源(webhook/egress/排程/legacy)→ inventory.json
     env = common.load_env()
-    inventory = build_inventory(template, env, args.from_app)
+    inventory = build_inventory(template, env, str(app_info.get("id")) if args.from_app else None)
     common.dump_json(work / "inventory.json", inventory)
     if inventory["webhooks"]:
         print(f"[NOTE] webhook 宣告:{', '.join(inventory['webhooks'])}(對外端點,進安裝後設定清單)")

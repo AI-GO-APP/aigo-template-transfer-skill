@@ -10,6 +10,7 @@
   secrets      ctx.secrets.get 的 key ⊆ setup_schema(反向不覆蓋則 warn)
   dsl          data_center_schema 驗證(本地鏡射或權威 parser)
   legacy       禁舊制 CustomObject(meta 欄位 + *_object API)
+  meta 閘      _template_meta.json 已經用戶確認(transfer_cli.py confirm-meta)且未再變更
   limits       檔數/單檔大小(AI GO 200 檔/1MB)
   paths        路徑安全(不含 \\ 與 ..)
 """
@@ -191,6 +192,22 @@ def audit_limits_and_paths(template: Path, rule: dict) -> tuple[list[str], list[
     return failures, warnings
 
 
+def audit_meta_gate(work: Path, template: Path) -> list[str]:
+    """meta 人工閘:門面文案(name/description/category/tags/長描述)是上架後第三方
+    唯一看得到的東西,AI 起草可以、拍板不行。裁決綁定檔案雜湊——確認過的必須就是要推的那份。"""
+    meta_path = template / "_template_meta.json"
+    if not meta_path.exists():
+        return ["缺少 _template_meta.json(先跑 normalize_meta.py)"]
+    entry = common.load_decisions(work).get("meta")
+    hint = f"python scripts/transfer_cli.py confirm-meta --slug {work.name}"
+    if not isinstance(entry, dict) or entry.get("decided_by") != "user":
+        return [f"meta 尚未經用戶確認(decisions.json 的 meta 目前是 "
+                f"{(entry or {}).get('decided_by', '未登記')})。請用戶執行:{hint}"]
+    if entry.get("meta_hash") != common.file_hash(meta_path):
+        return [f"_template_meta.json 在用戶確認後又被改過(雜湊不符),需重新確認:{hint}"]
+    return []
+
+
 def audit_pollution_rescan(work: Path, template: Path) -> list[str]:
     """污染複掃兜底:S3 之後(demo 資料、meta、閘內手改)混入的新污染在此擋下。
     任何非 info 且沒有用戶 keep 裁決的 finding 都是失敗。"""
@@ -230,6 +247,7 @@ def main() -> None:
     results["舊制禁用"] = audit_legacy(template, rules["legacy"])
     limit_fails, limit_warns = audit_limits_and_paths(template, rules["limits"])
     results["檔數/路徑上限"] = limit_fails
+    results["meta 人工閘"] = audit_meta_gate(work, template)
     results["污染複掃"] = audit_pollution_rescan(work, template)
 
     all_pass = True
