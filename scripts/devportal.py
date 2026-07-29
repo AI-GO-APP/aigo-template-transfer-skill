@@ -7,6 +7,15 @@
     python scripts/devportal.py push --slug my_template [--category ...]   # S7
     python scripts/devportal.py submit --slug my_template --note "..."     # S9(互動確認)
 
+版本線與診斷(0.4.0 新增):
+
+    python scripts/devportal.py bump --slug my_template --kind minor  # 已發布模組出下一版
+    python scripts/devportal.py withdraw --slug my_template           # 撤回送審才能繼續編輯
+    python scripts/devportal.py events --slug my_template             # 送審門檻現況(伺服器真相)
+    python scripts/devportal.py pull --slug my_template               # 把平台上的檔案取回
+    python scripts/devportal.py live-templates [--query x]            # 架上清單(S0 比對重疊)
+    python scripts/devportal.py adopt --template-slug x               # 接管架上模板(admin,不可逆)
+
 PAT 引導(SKILL.md Phase 0 的落地):
 1. 登入/註冊 https://developer.ai-go.app → 設定頁(/settings)→「API Token(PAT)」→ 發行
    (token 只顯示一次,aigodev_ 開頭)
@@ -22,6 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common
+import devportal_paths as paths
 
 ENV_TEMPLATE = """# Developer 平台(本檔已被 .gitignore,不會進版控)
 DEVPORTAL_API=https://developer.ai-go.app/api/v1
@@ -126,8 +136,24 @@ def find_editable_version(env: dict, module_id: str) -> dict:
     for v in detail.get("versions", []):
         if v.get("state") in ("draft", "rejected"):
             return v
-    raise SystemExit("[FAIL] 模組沒有可編輯(draft/rejected)的版本;"
-                     "若上一版已送審請先 withdraw,已發布請在平台開新版本。")
+    states = {v.get("state") for v in detail.get("versions", [])}
+    if "submitted" in states:
+        raise SystemExit("[FAIL] 版本已送審(submitted),送審中不可改內容。要繼續編輯先撤回:"
+                         "\n    python scripts/devportal.py withdraw --slug <slug>")
+    raise SystemExit("[FAIL] 模組沒有可編輯(draft/rejected)的版本(目前:"
+                     f"{', '.join(sorted(s for s in states if s)) or '無版本'})。"
+                     "已發布的模組要出下一版請先開新版本:"
+                     "\n    python scripts/devportal.py bump --slug <slug> --kind minor")
+
+
+def state_ids(work) -> tuple[str, str]:
+    """從狀態機取 S7 記下的 module_id / version_id。"""
+    state = common.load_state(work)
+    s7 = state["stages"].get("S7_draft") or {}
+    if not s7.get("module_id") or not s7.get("version_id"):
+        raise SystemExit("[FAIL] 狀態機沒有 module_id/version_id——請先跑 "
+                         "python scripts/devportal.py push --slug <slug>")
+    return s7["module_id"], s7["version_id"]
 
 
 def cmd_push(args) -> None:
@@ -155,6 +181,37 @@ def cmd_push(args) -> None:
             if bad:
                 raise SystemExit(f"[FAIL] tags 不在平台候選集:{bad}——合法值見 GET /refs/tags;"
                                  f"要新增 tag 需 admin 在標籤總覽建立(registry)")
+
+    # data_references_schema 前置檢查:引用了 AI GO 不存在的表 → 租戶安裝時被靜默略過,
+    # runtime 打 /proxy 直接被擋。平台 preflight 會 fail,但錯誤要到推完檔才看得到;
+    # 這裡提前用 /refs 擋下,順便驗欄位名(preflight 對欄位只給 warn)。
+    refs = paths.declared_refs(meta)
+    if refs:
+        status, available = api(env, "GET", "/refs/available-tables")
+        if status != 200:
+            print(f"[WARN] 讀 /refs/available-tables 失敗(HTTP {status}),略過引用前置檢查")
+        else:
+            names = {t.get("name") for t in available if isinstance(t, dict)}
+            missing = [r["table_name"] for r in refs if r["table_name"] not in names]
+            if missing:
+                raise SystemExit(
+                    f"[FAIL] data_references_schema 引用了 AI GO 不存在(或不可引用)的表:"
+                    f"{missing}——租戶安裝會被靜默略過,runtime 打 /proxy 即被擋。"
+                    f"合法表清單見 GET /refs/available-tables")
+            for r in refs:
+                declared_cols = r.get("columns") or []
+                if not declared_cols:
+                    continue
+                status, cols = api(env, "GET", f"/refs/tables/{r['table_name']}/columns")
+                if status != 200:
+                    continue
+                real = {c.get("name") for c in cols if isinstance(c, dict)}
+                bad_cols = [c for c in declared_cols if c not in real]
+                if bad_cols:
+                    raise SystemExit(
+                        f"[FAIL] 引用表 '{r['table_name']}' 宣告了不存在的欄位:{bad_cols}——"
+                        f"實際欄位見 GET /refs/tables/{r['table_name']}/columns")
+        print(f"[OK] 引用宣告已驗證({len(refs)} 張 AI GO 表)")
 
     # 建立或沿用模組(建立時平台自動帶 1.0.0 draft,不可再 POST /versions)
     module_id = state["stages"].get("S7_draft", {}).get("module_id")
@@ -273,9 +330,191 @@ def cmd_submit(args) -> None:
     decisions["submit"] = {"decision": "submitted", "decided_by": "user", "at": common._now(),
                            "request_id": resp.get("request_id")}
     common.save_decisions(work, decisions)
+    # `status` 是 mark_stage 的位置參數,不能再從 **extra 傳同名鍵(會 TypeError,
+    # 而且是在**送審已經成功之後**才炸——用戶只看到 traceback,以為沒送出去)。
     common.mark_stage(work, state, "S9_submit", "passed",
-                      request_id=resp.get("request_id"), status=resp.get("status"))
+                      request_id=resp.get("request_id"), review_status=resp.get("status"))
     print(f"[OK] 已送審:request_id={resp.get('request_id')} status={resp.get('status')}")
+
+
+def cmd_bump(args) -> None:
+    """開新版本。已發布(approved)的模組要出下一版只有這條路。
+
+    平台規則:同時只能有一條進行中的版本線,已有 draft/rejected 時回 409。
+    新版本會成為 S7 的目標,S8/S9 一律重置——新版本沒測過。
+    """
+    work = common.work_dir(args.slug)
+    env = common.load_env()
+    module_id, old_vid = state_ids(work)
+
+    status, resp = api(env, "POST", f"/modules/{module_id}/versions",
+                       body={"kind": args.kind, "copy_files": not args.empty})
+    if status == 409:
+        raise SystemExit(f"[FAIL] 已有進行中的版本線(HTTP 409):{resp.get('detail', resp)}\n"
+                         f"       草稿本身就是新版本——直接編輯並送審,或先刪除該版本。")
+    if status not in (200, 201):
+        raise SystemExit(f"[FAIL] 開新版本失敗(HTTP {status}):{resp}")
+
+    state = common.load_state(work)
+    state["stages"]["S7_draft"] = {"status": "passed", "at": common._now(),
+                                   "module_id": module_id, "version_id": resp["id"],
+                                   "version": resp.get("version"),
+                                   "note": f"bump {args.kind} from {old_vid}"}
+    for stage in ("S8_e2e", "S9_submit"):
+        state["stages"][stage] = {"status": "pending"}
+    common.save_state(work, state)
+    print(f"[OK] 已開新版本 {resp.get('version')}(id={resp['id']},state={resp.get('state')})"
+          f"{'' if args.empty else ',已複製上一版檔案'}")
+    print("[!] S8/S9 已重置——新版本必須重跑 e2e。下一步:")
+    print(f"    python scripts/devportal.py push --slug {args.slug}")
+
+
+def cmd_withdraw(args) -> None:
+    """撤回送審。送審中(submitted)不可改內容,要繼續編輯得先撤回。"""
+    work = common.work_dir(args.slug)
+    env = common.load_env()
+    module_id, version_id = state_ids(work)
+
+    status, resp = api(env, "POST", f"/modules/{module_id}/versions/{version_id}/withdraw")
+    if status not in (200, 201):
+        raise SystemExit(f"[FAIL] 撤回失敗(HTTP {status}):{resp}")
+
+    # ★ 寫後回讀:確認狀態真的離開 submitted
+    status, detail = api(env, "GET", f"/modules/{module_id}")
+    ver_state = next((v.get("state") for v in detail.get("versions", [])
+                      if v.get("id") == version_id), None) if status == 200 else None
+    if ver_state == "submitted":
+        raise SystemExit("[FAIL] 寫後回讀:版本仍是 submitted,撤回未生效,請到平台確認")
+
+    state = common.load_state(work)
+    state["stages"]["S9_submit"] = {"status": "pending"}
+    common.save_state(work, state)
+    print(f"[OK] 已撤回送審(版本現為 {ver_state});S9 已重置,可繼續編輯後重新送審。")
+
+
+def cmd_events(args) -> None:
+    """讀版本的佈署/測試事件——送審門檻的唯一真相在伺服器,不在本地報告。"""
+    env = common.load_env()
+    module_id, version_id = state_ids(common.work_dir(args.slug))
+    status, events = api(env, "GET", f"/modules/{module_id}/versions/{version_id}/events")
+    if status != 200:
+        raise SystemExit(f"[FAIL] 讀事件失敗(HTTP {status}):{events}")
+
+    last_deploy = max((e.get("created_at") or "" for e in events
+                       if e.get("kind") == "deploy"), default="")
+    print(f"共 {len(events)} 筆事件;最後 deploy:{last_deploy or '(尚無)'}\n")
+    for e in events:
+        detail = e.get("detail") or {}
+        fresh = "*" if (e.get("created_at") or "") >= last_deploy and last_deploy else " "
+        tail = ""
+        if detail.get("action"):
+            tail = f"  action={detail['action']} status={detail.get('status')}"
+        elif e.get("kind") == "test":
+            tail = "  (預覽型 test)"
+        print(f" {fresh} {e.get('created_at')}  {e.get('kind'):<7}{tail}")
+    print("\n(* = 發生在最後一次 deploy 之後,即對送審門檻有效的事件)")
+
+    fresh_events = [e for e in events if (e.get("created_at") or "") >= last_deploy]
+    passed = {(e.get("detail") or {}).get("action") for e in fresh_events
+              if e.get("kind") == "test" and (e.get("detail") or {}).get("status") == "success"}
+    passed.discard(None)
+    has_preview = any(e.get("kind") == "test" and not (e.get("detail") or {}).get("action")
+                      for e in fresh_events)
+    print(f"\n門檻現況:預覽型 test = {'有' if has_preview else '缺'};"
+          f"已成功執行的 action = {', '.join(sorted(passed)) if passed else '(無)'}")
+
+
+def cmd_pull(args) -> None:
+    """把平台上某版本的檔案內容取回本機。
+
+    ai-go-templates repo 已關閉後,架上/平台的內容才是權威;要接續維護一支
+    不是本機轉出來的模板(或核對平台實際存了什麼),得靠這支。
+    """
+    env = common.load_env()
+    module_id, version_id = state_ids(common.work_dir(args.slug))
+    status, files = api(env, "GET",
+                        f"/modules/{module_id}/versions/{version_id}/files/content")
+    if status != 200:
+        raise SystemExit(f"[FAIL] 取檔案內容失敗(HTTP {status}):{files}")
+
+    dest = Path(args.dest) if args.dest else common.work_dir(args.slug) / "pulled"
+    if dest.exists() and any(dest.iterdir()) and not args.force:
+        raise SystemExit(f"[FAIL] {dest} 非空;確認要覆寫請加 --force")
+    written = 0
+    for f in files:
+        rel = f.get("file_path") or ""
+        # 平台端已擋 `..` 與 `\`,這裡再擋一次:寫檔前絕不信任遠端路徑。
+        if not rel or rel.startswith("/") or ".." in rel.split("/") or "\\" in rel:
+            print(f"[WARN] 略過可疑路徑:{rel!r}")
+            continue
+        target = dest / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if f.get("is_binary"):
+            target.write_bytes(base64.b64decode(f.get("content") or ""))
+        else:
+            target.write_text(f.get("content") or "", encoding="utf-8")
+        written += 1
+    print(f"[OK] 已取回 {written} 檔 → {dest}")
+
+
+def cmd_live_templates(args) -> None:
+    """架上模板清單——候選判定(S0)比對重疊的唯一權威。
+
+    回應形狀是 `{"templates": [...], "source": "aigo"}`(不是裸陣列);
+    每支帶 `is_managed` / `can_adopt`,是否可接管以 `can_adopt` 為準,不要自行推論。
+    """
+    env = common.load_env()
+    status, payload = api(env, "GET", "/live-templates")
+    if status != 200:
+        raise SystemExit(f"[FAIL] 讀架上清單失敗(HTTP {status}):{payload}")
+    items = payload.get("templates", []) if isinstance(payload, dict) else payload
+    q = (args.query or "").lower()
+    rows = [t for t in items if isinstance(t, dict) and (
+        not q or q in str(t.get("slug", "")).lower() or q in str(t.get("name", "")).lower()
+        or q in str(t.get("category", "")).lower())]
+    print(f"架上 {len(items)} 支模板"
+          + (f",符合 '{args.query}' 的 {len(rows)} 支" if q else "") + ":\n")
+    for t in rows:
+        if t.get("can_adopt"):
+            managed = "未受管(可接管)"
+        elif t.get("is_managed"):
+            managed = "已受管"
+        else:
+            managed = str(t.get("state") or "-")
+        print(f"  {str(t.get('slug')):<30} {str(t.get('category') or ''):<13} "
+              f"{managed:<14} {t.get('name', '')}")
+
+
+def cmd_adopt(args) -> None:
+    """接管一支未受管的架上模板(admin)。
+
+    **不可逆**:一支模板只能被接管一次,且會在 AI GO 端鎖住其他發布路徑。
+    故比照 submit 走人工閘,由用戶親自輸入確認。
+    """
+    env = common.load_env()
+    status, me = api(env, "GET", "/auth/me")
+    if status != 200:
+        raise SystemExit(f"[FAIL] 認證失敗(HTTP {status}):{me}")
+    if me.get("level") != "admin":
+        raise SystemExit(f"[FAIL] 接管需要 admin(目前 level={me.get('level')})。"
+                         f"請找平台 admin 執行,不要嘗試繞路。")
+
+    print(f"接管確認(不可逆):架上模板 '{args.template_slug}' 將被納入本平台管理,")
+    print("並在 AI GO 端鎖住其他發布路徑;creator 會掛在你身上(之後可用「移交模組」轉出)。")
+    answer = input("確認接管?(輸入 yes 確認)")
+    if answer.strip().lower() != "yes":
+        raise SystemExit("[ABORT] 未確認,不接管。")
+
+    status, resp = api(env, "POST", f"/live-templates/{args.template_slug}/adopt")
+    if status == 502:
+        raise SystemExit(f"[FAIL] AI GO 那側失敗(HTTP 502):{resp.get('detail', resp)}\n"
+                         f"       本地尚未寫入任何東西,排除後可安全重試。")
+    if status not in (200, 201):
+        raise SystemExit(f"[FAIL] 接管失敗(HTTP {status}):{resp}")
+    print(f"[OK] 已接管:module_id={resp.get('module_id')} "
+          f"version={resp.get('version')} files={resp.get('files_adopted')}")
+    print("下一步:用 pull 取回內容作為後續維護的基準:")
+    print(f"    python scripts/devportal.py pull --slug <你的工作區 slug>")
 
 
 def main() -> None:
@@ -295,6 +534,34 @@ def main() -> None:
     p.add_argument("--slug", required=True)
     p.add_argument("--note", default="")
     p.set_defaults(func=cmd_submit)
+
+    p = sub.add_parser("bump", help="開新版本(已發布模組要出下一版的唯一路徑)")
+    p.add_argument("--slug", required=True)
+    p.add_argument("--kind", choices=("major", "minor", "patch"), default="minor")
+    p.add_argument("--empty", action="store_true", help="不複製上一版檔案")
+    p.set_defaults(func=cmd_bump)
+
+    p = sub.add_parser("withdraw", help="撤回送審(送審中不可改內容)")
+    p.add_argument("--slug", required=True)
+    p.set_defaults(func=cmd_withdraw)
+
+    p = sub.add_parser("events", help="讀佈署/測試事件與送審門檻現況")
+    p.add_argument("--slug", required=True)
+    p.set_defaults(func=cmd_events)
+
+    p = sub.add_parser("pull", help="把平台上的版本檔案取回本機")
+    p.add_argument("--slug", required=True)
+    p.add_argument("--dest", help="目的目錄(預設 work/<slug>/pulled)")
+    p.add_argument("--force", action="store_true", help="目的目錄非空時仍覆寫")
+    p.set_defaults(func=cmd_pull)
+
+    p = sub.add_parser("live-templates", help="架上模板清單(S0 候選判定用)")
+    p.add_argument("--query", help="以 slug/名稱過濾")
+    p.set_defaults(func=cmd_live_templates)
+
+    p = sub.add_parser("adopt", help="接管未受管的架上模板(admin,不可逆,互動確認)")
+    p.add_argument("--template-slug", required=True, help="架上模板的 slug")
+    p.set_defaults(func=cmd_adopt)
 
     args = parser.parse_args()
     args.func(args)

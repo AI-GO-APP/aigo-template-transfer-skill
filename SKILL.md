@@ -78,7 +78,16 @@ python scripts/devportal.py whoami
 先盤點,再讓用戶拍板:
 
 1. 檢視來源 app 的功能與規模(actions 數、頁面數、自建表)。
-2. 對照既有模板是否重疊:平台 `GET /live-templates`(架上清單即唯一權威)。
+2. 對照既有模板是否重疊(架上清單即唯一權威):
+
+```bash
+python scripts/devportal.py live-templates [--query <關鍵字>]
+```
+
+   若判定為「併入既有」且該支**未受管**(`can_adopt`),要先接管才能在本平台改:
+   `python scripts/devportal.py adopt --template-slug <架上 slug>`(admin、**不可逆**、
+   帶人工確認閘),接管後用 `pull` 取回內容當維護基準。
+
 3. 向用戶呈報三選一建議(新開 new / 併入既有 merge / 排除 exclude)與理由,由用戶執行:
 
 ```bash
@@ -226,6 +235,20 @@ python scripts/devportal.py push --slug <slug>
 (name/category/setup_schema/data_center_schema)與檔數都會 GET 回來比對,
 不符即失敗——不要靠 API 回傳的 200 就宣稱成功。
 
+push 另會前置驗證 `data_references_schema`(`GET /refs/available-tables` /
+`.../columns`):引用了 AI GO 不存在的表或欄位直接擋下,不必等推完檔才被 preflight fail。
+
+**沒有可編輯版本時**(上一版已送審或已發布),push 會停下並指出該用哪一支:
+
+```bash
+python scripts/devportal.py withdraw --slug <slug>              # 送審中 → 撤回才能改
+python scripts/devportal.py bump --slug <slug> --kind minor     # 已發布 → 開新版本
+```
+
+`bump` 會把新版本設為 S7 目標並**重置 S8/S9**(新版本沒測過,舊綠燈不可沿用)。
+要核對平台實際存了什麼、或接手一支不是本機轉出來的模板:
+`python scripts/devportal.py pull --slug <slug>`。
+
 ## Phase 8:沙箱端到端測試(S8)
 
 ```bash
@@ -237,11 +260,28 @@ python scripts/e2e_devportal.py --slug <slug> --quick      # 快速檔(迭代中
 
 | 檔位 | 內容 | 用途 |
 |---|---|---|
-| `--quick` | preflight + 沙箱 secrets + 每張表 CRUD | 只改文案/CSS 後的快速重驗;不記 test 事件、不推進狀態機 |
+| `--quick` | preflight + 沙箱 secrets + 每張表 CRUD(insert→list→update→delete) | 只改文案/CSS 後的快速重驗;不記 test 事件、不推進狀態機 |
 | full(預設) | quick + 沙箱 egress 註冊 + 全部 enabled action 執行 + `seed_demo_data` 冪等重跑 + test 事件 | **送審前必須**;S9 會檢查最後一次 e2e 是 full |
 
+e2e 的表 CRUD **分兩個面跑**,兩者的端點不同、不可互串(細節見
+`references/devportal-api.md`「資料面有兩組」):
+
+- `data_center_schema` 宣告的**自建表** → `/data/objects/{key}/records`
+- `data_references_schema` 宣告的**引用表** → `/proxy/...`(平台會驗 AI GO 快照)
+
+引用表的樣本列依 `GET /refs/tables/{t}/columns` 的真實欄位型別產生;
+宣告了 AI GO 不存在的表會在此 fail(而非等到上架後 runtime 才被擋)。
+
 **送審門檻(平台 2026-07-28 更新)**:每支 enabled action 必須在最後 deploy 後
-於沙箱**成功跑過一次**——執行紀錄由伺服器自動記,前端不可宣稱。這代表:
+於沙箱**成功跑過一次**——執行紀錄由伺服器自動記,前端不可宣稱。e2e 的
+`submit-gate` 條目改為**跟伺服器對帳**(`GET .../events`),不再只用本地報告推算;
+任何時候都可以單獨查現況:
+
+```bash
+python scripts/devportal.py events --slug <slug>
+```
+
+這代表:
 - `--expect allow_fail_actions` 只影響本地報告判讀,**擋不住平台端**;
   真跑不通的 action 只有兩條路:補真憑證(`--secrets-file`/`--egress-file`)重跑,
   或 manifest 設 `is_enabled:false` 停用後重新 push。

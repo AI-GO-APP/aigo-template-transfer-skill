@@ -22,11 +22,14 @@ Base:`https://developer.ai-go.app/api/v1`。權威清單:`GET /dev-docs/endpoint
 | `PUT /modules/{mid}/versions/{vid}/files` | `{files:[{file_path,content,is_binary}]}` **全量取代**,自動記 deploy 事件 |
 | `GET /modules/{mid}/versions/{vid}/preflight` | 靜態預檢(entry/imports/secrets/scopes/actions/manifest/references) |
 | `GET/POST /modules/{mid}/versions/{vid}/events` | 查/記事件;POST 只收 `{kind:"test", detail:{}}` |
+| `GET /modules/{mid}/versions/{vid}/files/content` | 取回版本全部檔案內容(`devportal.py pull`) |
 | `POST /modules/{mid}/versions/{vid}/submit` | `{note}` → `{request_id, status}` |
-| `POST /modules/{mid}/versions/{vid}/withdraw` | 撤回送審 |
+| `POST /modules/{mid}/versions/{vid}/withdraw` | 撤回送審(`devportal.py withdraw`) |
+| `POST /modules/{mid}/versions` | `{kind: major\|minor\|patch, copy_files}` 開新版本(`devportal.py bump`) |
 
 注意:
 - 建模組後**不要** `POST /versions`——存在進行中版本線(draft/rejected/submitted)會 409。
+  已發布(approved)的模組要出下一版才用它,這也是唯一的路。
 - 版本狀態機:draft → submitted → approved/rejected;approved 後舊版 superseded。
 - **送審門檻(2026-07-28 更新)**:preflight ok + ≥1 筆 deploy 事件 + 最後 deploy 之後:
   (a) 一筆**無 detail.action** 的 test 事件(預覽測試,可手動 POST);
@@ -55,19 +58,39 @@ data_references_schema, author, version`
 
 ## 沙箱(全部 `/sandbox/v/{version_id}` 前綴)
 
+### ★ 資料面有兩組,不可互串(踩過的坑)
+
+平台有兩組長得像、語意完全不同的資料端點。**餵錯表名 100% 404**:
+
+| metadata 宣告 | 語意 | 沙箱端點 | 前端 SDK |
+|---|---|---|---|
+| `data_center_schema.tables[]` | 模板**自建**表 | `/data/objects/{key}/records` | data_table |
+| `data_references_schema[]` | 引用 **AI GO 既有**表 | `/proxy/{app_id}/{table}` | proxy |
+
+`/proxy` 與 `/tables/{t}/seed\|rows` 這一面在平台端有 `assert_table` 硬驗 AI GO 快照
+(`ctx_core/sandbox.py`),自建表名打過去回 404「AI GO 無此表」;反之引用表打
+`/data/objects` 則是進到「未知 slug = 空集合」的自建表語意,測不到真東西。
+腳本一律經 `scripts/devportal_paths.py` 組路徑,不要手拼。
+
 | Method / Path | 說明 |
 |---|---|
+| `GET/POST /sandbox/v/{vid}/data/objects/{key}/records` | **自建表** CRUD;`ext/data/...` 為 external 變體 |
+| `PATCH/DELETE /sandbox/v/{vid}/data/records/{record_id}` | 同上;路徑不帶表名,平台以 record id 反查 |
+| `GET/POST /sandbox/v/{vid}/proxy/{app_id}/{table}` | **引用表** CRUD(internal);沙箱以 vid 充當 app_id |
+| `GET/POST /sandbox/v/{vid}/ext/proxy/{table}` | 引用表 CRUD(external,不帶 app_id) |
+| `POST /sandbox/v/{vid}[/ext]/proxy/{table}/query` | 引用表查詢 |
+| `PATCH/DELETE /sandbox/v/{vid}[/ext]/proxy/{table}/{row_id}` | 引用表單列更新/刪除 |
 | `GET /sandbox/v/{vid}/tables` | 各表筆數 |
-| `POST /sandbox/v/{vid}/tables/{table}/seed?count=N` | 灌假資料 |
+| `POST /sandbox/v/{vid}/tables/{table}/seed?count=N` | 灌假資料(**僅引用表**,會驗快照) |
+| `GET /sandbox/v/{vid}/tables/{table}/rows` | 讀沙箱資料(僅引用表) |
 | `GET/PUT /sandbox/v/{vid}/secrets` | 沙箱金鑰 |
 | `GET/PUT/DELETE /sandbox/v/{vid}/egress[/{slug}]` | 沙箱 egress;PUT body 支援 `allow_dynamic_host`(wildcard,`ctx.http.fetch` 用) |
+| `GET /sandbox/v/{vid}/custom-app-auth/{slug}/me`、`POST .../logout` | external 模板的沙箱登入態 |
 | `POST /sandbox/v/{vid}/actions/apps/{app_id}/run/{name}` | 跑 action(internal);runner 未配置回 503;`is_enabled:false` 回 409;**執行結果由伺服器記成 test 事件(detail.action/status)** |
 | `POST /sandbox/v/{vid}/ext/actions/run/{name}` | 跑 action(external);同上自動記錄 |
 
 沙箱**寫入**與 test 事件回報需 `editor`(read_only 只能看)。新版 data_table SDK
 (自建表)沙箱已支援;沙箱與 AI GO prod 的已知行為差距已於 2026-07-28 收斂(PR #30)。
-| `POST/GET /sandbox/v/{vid}/proxy/{app_id}/{table}` | SDK 相容 CRUD(internal) |
-| `POST/GET /sandbox/v/{vid}/ext/proxy/{table}` | SDK 相容 CRUD(external) |
 
 前端 preview:`https://developer.ai-go.app/preview/{module_id}?v={version_id}`
 (esbuild-wasm 瀏覽器端編譯,3 秒無錯自動 POST test 事件)。
@@ -75,6 +98,21 @@ data_references_schema, author, version`
 ## 參考資料端點
 
 `GET /refs/tags`、`GET /refs/available-tables`、`GET /refs/tables/{t}/columns`、`GET /auth/me`
+
+`available-tables` 回 `[{name, comment}]`,`columns` 回
+`[{name, type, nullable, is_system}]`。`push` 會拿這兩支前置驗證
+`data_references_schema`(表不存在直接擋下,不必等推完檔才被 preflight fail);
+e2e 也用 `columns` 產引用表的樣本列。
+
+## 架上模板(`/live-templates`)
+
+- `GET /live-templates` → **`{templates: [...], source}`**(不是裸陣列)。每支帶
+  `slug/name/category/is_managed/state/can_adopt/module{...}`;可否接管看 `can_adopt`,
+  不要自行從 `module` 推論。S0 候選判定比對重疊用(`devportal.py live-templates`)。
+- `POST /live-templates/{slug}/adopt`(admin)→ 把未受管的架上模板納入平台管理:
+  取回架上內容建成基準版本,並在 AI GO 端鎖住其他發布路徑。
+  **不可逆、一支只能接管一次**;AI GO 那側失敗回 502(本地未寫入,可安全重試)。
+  `devportal.py adopt` 帶人工確認閘。
 
 ## 來源側(AI GO 本體,`https://ai-go.app/api/v1`)
 

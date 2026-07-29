@@ -34,6 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common
+import devportal_paths as paths
 from devportal import api
 
 
@@ -134,37 +135,90 @@ def main() -> None:
             run_phase(report, f"egress:{slug}", "fail", f"HTTP {status}:{resp}")
             hard_fail = True
 
-    # Phase 3: 表 CRUD(經 sandbox ext proxy;internal 亦可用 proxy/{app_id} 形式)
-    tables = (meta.get("data_center_schema") or {}).get("tables", [])
-    for table in tables:
-        tkey = table["key"]
-        sample = {}
-        for f in table["fields"]:
-            if f.get("type") == "relation":
-                continue
-            sample[f["key"]] = {
-                "text": "e2e 測試", "number": 1, "boolean": True,
-                "date": "2026-01-01", "datetime": "2026-01-01T00:00:00",
-                "select": (f.get("options") or ["e2e"])[0],
-                "json": {}, "image": None,
-            }.get(f.get("type"), "e2e")
-        base = (f"/sandbox/v/{vid}/ext/proxy/{tkey}" if access_mode == "external"
-                else f"/sandbox/v/{vid}/proxy/{vid}/{tkey}")
+    # Phase 3: 表 CRUD——**自建表與引用表是兩個不同的端點面**,見 devportal_paths 檔頭。
+    # 3a 自建表(data_center_schema)走 data_table SDK 面 /data/objects/{key}/records;
+    # 3b 引用表(data_references_schema)走 proxy SDK 面 /proxy/...(平台會驗 AI GO 快照)。
+    # 兩者互餵必定 404,且 0.3.4 以前的 e2e 正是把自建表餵給 /proxy。
+
+    def crud_cycle(label: str, base: str, sample: dict,
+                   record_path, query_path: str | None = None) -> None:
+        """insert → list → (query) → update → delete。
+
+        兩個面的 insert 與 list 都是同一個 base(POST/GET 同路徑);update/delete
+        則因面而異(自建表以 record id 反查、引用表帶表名),故由 record_path 組。
+        會刪掉自己插的列,不留測試髒資料。
+        """
+        nonlocal hard_fail
         status, created = api(env, "POST", base, body=sample)
         if status not in (200, 201):
             if is_approval_pending(created):
-                run_phase(report, f"crud:{tkey}", "warn",
-                          "簽核流程攔截(pending)——非失敗,不可重試")
-                continue
-            run_phase(report, f"crud:{tkey}", "fail", f"insert HTTP {status}:{created}")
+                run_phase(report, label, "warn", "簽核流程攔截(pending)——非失敗,不可重試")
+                return
+            run_phase(report, label, "fail", f"insert HTTP {status}:{str(created)[:200]}")
             hard_fail = True
-            continue
-        status, rows = api(env, "GET", base)
+            return
+        steps = ["insert"]
+        status, _ = api(env, "GET", base)
         if status != 200:
-            run_phase(report, f"crud:{tkey}", "fail", f"query HTTP {status}")
+            run_phase(report, label, "fail", f"list HTTP {status}")
+            hard_fail = True
+            return
+        steps.append("list")
+        if query_path:
+            status, _ = api(env, "POST", query_path, body={"filters": {}})
+            if status != 200:
+                run_phase(report, label, "fail", f"query HTTP {status}")
+                hard_fail = True
+                return
+            steps.append("query")
+
+        rid = created.get("id") if isinstance(created, dict) else None
+        if not rid:
+            run_phase(report, label, "warn",
+                      f"{'+'.join(steps)};回應無 id,update/delete 未驗")
+            return
+        status, _ = api(env, "PATCH", record_path(rid), body=sample)
+        if status not in (200, 204):
+            run_phase(report, label, "fail", f"update HTTP {status}")
+            hard_fail = True
+            return
+        steps.append("update")
+        status, _ = api(env, "DELETE", record_path(rid))
+        if status not in (200, 204):
+            run_phase(report, label, "fail", f"delete HTTP {status}")
+            hard_fail = True
+            return
+        steps.append("delete")
+        run_phase(report, label, "pass", "+".join(steps))
+
+    # 3a: 自建表
+    for table in paths.declared_tables(meta):
+        tkey = table["key"]
+        crud_cycle(
+            f"crud:自建表 {tkey}",
+            paths.data_records(vid, tkey, access_mode),
+            {"data": paths.sample_for_fields(table.get("fields"))},
+            lambda rid: paths.data_record(vid, rid, access_mode),
+        )
+
+    # 3b: 引用表。樣本列依 AI GO 真實欄位型別產生(GET /refs/tables/{t}/columns),
+    # 順帶驗證宣告的表在平台真的存在——preflight 對此只給 fail 訊息,這裡提前抓。
+    for ref in paths.declared_refs(meta):
+        tname = ref["table_name"]
+        status, cols = api(env, "GET", f"/refs/tables/{tname}/columns")
+        if status != 200:
+            run_phase(report, f"crud:引用表 {tname}", "fail",
+                      f"AI GO 無此表或不可引用(HTTP {status})——"
+                      f"data_references_schema 宣告錯誤,租戶安裝會被靜默略過")
             hard_fail = True
             continue
-        run_phase(report, f"crud:{tkey}", "pass", "insert+query")
+        crud_cycle(
+            f"crud:引用表 {tname}",
+            paths.proxy_rows(vid, tname, access_mode),
+            paths.sample_for_columns(cols),
+            lambda rid, t=tname: paths.proxy_row(vid, t, rid, access_mode),
+            paths.proxy_query(vid, tname, access_mode),
+        )
 
     # Phase 4: actions(--quick 跳過)
     actions_dir = template / "actions"
@@ -223,18 +277,50 @@ def main() -> None:
             run_phase(report, f"action:{name}{tag}", "fail", f"HTTP {status}:{str(resp)[:200]}")
             hard_fail = True
 
-    # Phase 4.5: 送審門檻試算——平台要求每支 enabled action 在最後 deploy 後
+    # Phase 4.5: 送審門檻對帳——平台要求每支 enabled action 在最後 deploy 後
     # 至少一筆 status=success 的沙箱執行紀錄(伺服器自動記,前端不可宣稱)。
-    # 沒跑通的 enabled action = 送審必被 422;唯二出路:補真憑證跑通,或 manifest 停用。
-    not_passed = [r["phase"].split(":", 1)[1].replace("(webhook)", "")
-                  for r in report
-                  if r["phase"].startswith("action:") and "冪等" not in r["phase"]
-                  and r["status"] != "pass"
-                  and r["phase"].split(":", 1)[1].replace("(webhook)", "") not in disabled]
-    if not_passed and not args.quick:
-        run_phase(report, "submit-gate", "warn",
-                  f"這些 enabled action 未成功執行,送審會被平台擋下:{', '.join(not_passed)}"
-                  f"——補真憑證重跑,或在 manifest 設 is_enabled:false 停用")
+    # 先前這裡只拿本地報告推算;本地判定「pass」與伺服器真的記到事件是兩回事
+    # (例如 runner 回 2xx 但事件寫入失敗),所以改為 GET 事件跟伺服器對帳。
+    if not args.quick:
+        status, events = api(env, "GET", f"/modules/{module_id}/versions/{vid}/events")
+        if status != 200 or not isinstance(events, list):
+            run_phase(report, "submit-gate", "warn",
+                      f"無法讀取事件紀錄(HTTP {status}),改以本地報告推算門檻")
+            succeeded = {r["phase"].split(":", 1)[1].replace("(webhook)", "")
+                         for r in report
+                         if r["phase"].startswith("action:") and "冪等" not in r["phase"]
+                         and r["status"] == "pass"}
+        else:
+            # 只認最後一次 deploy 之後的事件——deploy 會讓先前的驗證全部失效。
+            last_deploy = max((e.get("created_at") or "" for e in events
+                               if e.get("kind") == "deploy"), default="")
+            succeeded = {
+                (e.get("detail") or {}).get("action")
+                for e in events
+                if e.get("kind") == "test"
+                and (e.get("created_at") or "") >= last_deploy
+                and (e.get("detail") or {}).get("status") == "success"
+                and (e.get("detail") or {}).get("action")
+            }
+            run_phase(report, "submit-gate-events", "pass",
+                      f"伺服器已記錄成功執行的 action:"
+                      f"{', '.join(sorted(succeeded)) if succeeded else '(無)'}")
+            # 門檻的另一半:最後 deploy 後要有一筆**無 detail.action** 的 test 事件
+            # (預覽測試)。本腳本的 Phase 6 會補記,故 --no-event 時才需要提醒。
+            has_preview = any(
+                e.get("kind") == "test" and (e.get("created_at") or "") >= last_deploy
+                and not (e.get("detail") or {}).get("action") for e in events)
+            if not has_preview and args.no_event:
+                run_phase(report, "submit-gate-preview", "warn",
+                          "最後 deploy 後尚無預覽型 test 事件,送審會被擋——"
+                          f"請開 https://developer.ai-go.app/preview/{module_id}?v={vid}")
+
+        not_passed = [n for n in action_names if n not in succeeded and n not in disabled]
+        if not_passed:
+            run_phase(report, "submit-gate", "warn",
+                      f"這些 enabled action 在伺服器上沒有「最後 deploy 之後的成功執行紀錄」,"
+                      f"送審會被平台擋下:{', '.join(not_passed)}"
+                      f"——補真憑證重跑,或在 manifest 設 is_enabled:false 停用")
 
     # Phase 5: 表列筆數(資訊性)
     status, counts = api(env, "GET", f"/sandbox/v/{vid}/tables")

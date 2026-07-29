@@ -86,6 +86,17 @@ python scripts/transfer_cli.py init --slug my_template
 | S8 | 沙箱端到端測試(`--quick`/full 兩檔) | `e2e_devportal.py` |
 | S9 | 送審(要求最後一次 e2e 為 full) | `devportal.py submit`(人工確認) |
 
+版本線與診斷(不屬於階段,隨時可用):
+
+| 指令 | 用途 |
+|---|---|
+| `devportal.py bump --kind minor` | 已發布模組開下一版(會重置 S8/S9) |
+| `devportal.py withdraw` | 撤回送審——送審中不可改內容 |
+| `devportal.py events` | 佈署/測試事件與送審門檻現況(伺服器真相) |
+| `devportal.py pull` | 把平台上的版本檔案取回本機 |
+| `devportal.py live-templates` | 架上清單(S0 比對重疊) |
+| `devportal.py adopt --template-slug x` | 接管未受管的架上模板(admin,**不可逆**) |
+
 S1 會同時盤點不隨 VFS 走的資源(webhook 宣告、Egress 網域、app 排程)→
 `inventory.json`,並在 S6 自動轉成「安裝後設定清單」寫入模板 long_description——
 確保安裝租戶知道要補哪些租戶級設定,模板裝完即可用。
