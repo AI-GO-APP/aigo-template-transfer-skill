@@ -29,8 +29,9 @@ VFS 上限(AI GO 側):200 檔、單檔 1MB。
 選填:`long_description, icon_emoji, access_mode, tags, setup_schema,
 required_egress, data_center_schema, data_references_schema, author`
 
-- `required_egress`:`{slug: {label?, description?}}`——模板保留 `ctx.http.call(slug)`
-  時必須宣告(normalize_meta 會自動從盤點補上),租戶安裝時據此提示授權外部服務。
+- `required_egress`:`{slug: {label?, description?}}`——模板使用 `ctx.http.call(slug)`
+  (對外呼叫的唯一正解)時必須宣告(normalize_meta 會自動從盤點補上),
+  租戶安裝時據此提示註冊同名 EgressService(base_url + 憑證由租戶填,閘道注入)。
 
 - category ∈ starter|messaging|crm|catering|integration|ai|operations|productivity|analytics
 - access_mode ∈ internal|external|self_built

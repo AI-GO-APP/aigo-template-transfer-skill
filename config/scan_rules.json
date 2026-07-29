@@ -5,7 +5,12 @@
       "id": "uuid_literal",
       "description": "硬編碼 UUID(疑似 app_id / tenant_id / object_id / table_id)",
       "pattern": "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
-      "extensions": [".ts", ".tsx", ".py", ".json"],
+      "extensions": [
+        ".ts",
+        ".tsx",
+        ".py",
+        ".json"
+      ],
       "severity": "high",
       "suggestion": "改為執行期取得(ctx.app_id / 由 SDK 注入),或參數化;若為註解/範例則裁決 keep"
     },
@@ -13,7 +18,9 @@
       "id": "legacy_object_api",
       "description": "舊制 CustomObject API — 本 skill 不支援舊制,必須改寫為 Data Center 新制(ctx.db.query_table 系)",
       "pattern": "ctx\\.db\\.(query_object|insert_object|update_object|remove_object|list_custom_objects)\\b",
-      "extensions": [".py"],
+      "extensions": [
+        ".py"
+      ],
       "severity": "blocker",
       "suggestion": "改寫為 ctx.db.query_table / insert_row / update_row / delete_row;注意新制預設升冪,需顯式 sort: -created_at"
     },
@@ -21,8 +28,13 @@
       "id": "legacy_frontend_records",
       "description": "前端舊制 Custom Data SDK 呼叫(submitRecord/listRecords 系,綁 objectId)",
       "pattern": "\\b(submitRecord|listRecords|updateRecord|deleteRecord)\\s*\\(",
-      "extensions": [".ts", ".tsx"],
-      "exclude_files": ["src/api.ts"],
+      "extensions": [
+        ".ts",
+        ".tsx"
+      ],
+      "exclude_files": [
+        "src/api.ts"
+      ],
       "severity": "high",
       "suggestion": "改用 db.ts 的 Data Center 表操作;若短期保留須確認 objectId 非硬編碼"
     },
@@ -30,34 +42,52 @@
       "id": "secret_key_usage",
       "description": "ctx.secrets.get 讀取的金鑰 key(須全部宣告於 setup_schema)",
       "pattern": "ctx\\s*\\.\\s*secrets\\s*\\.\\s*get\\s*\\(\\s*['\"]([^'\"\\n]+)['\"]",
-      "extensions": [".py"],
+      "extensions": [
+        ".py"
+      ],
       "severity": "medium",
       "capture": true,
       "suggestion": "確認此 key 是產品功能所需並納入 setup_schema;客戶專屬者改名為通用 key 或移除"
     },
     {
-      "id": "legacy_ctx_http",
-      "description": "ctx.http.call/fetch — builder skill v1.1.0 起已移除此路徑,對外呼叫一律改 import httpx",
-      "pattern": "ctx\\.http\\.(?:call|fetch)\\s*\\(\\s*['\"]([^'\"\\n]+)['\"]",
-      "extensions": [".py"],
+      "id": "raw_http_outbound",
+      "description": "action 直接 import httpx/requests/urllib 對外連線——runner 是 default-deny egress(ADR-0003),raw 連線會 timeout;正解是 ctx.http.call(<egress-slug>, path)",
+      "pattern": "^\\s*(?:import\\s+(?:httpx|requests)\\b|from\\s+(?:httpx|requests)\\s+import\\b|import\\s+urllib\\.request\\b)",
+      "extensions": [
+        ".py"
+      ],
       "severity": "high",
-      "capture": true,
-      "suggestion": "改寫為 import httpx + ctx.secrets.get() + 強制 timeout=;目標網域記入安裝後設定清單(租戶需在後台 /dashboard/settings/integrations 加入 Egress 白名單)"
+      "capture": false,
+      "suggestion": "改寫為 ctx.http.call(\"<egress-slug>\", \"<path>\", method=..., body=...);憑證不要自帶 Authorization(閘道會剝掉),由租戶註冊 EgressService 時填入。slug 需在 _template_meta.json 的 required_egress 宣告(normalize_meta.py 會補),並記入安裝後設定清單。"
     },
     {
       "id": "hardcoded_url",
       "description": "硬編碼網址(可能是客戶網域、webhook、第三方端點)",
       "pattern": "https?://[A-Za-z0-9._~:/?#@!$&'()*+,;=%\\-]+",
-      "extensions": [".ts", ".tsx", ".py"],
-      "exclude_patterns": ["www.w3.org", "reactjs.org", "developer.mozilla.org", "schema.org"],
+      "extensions": [
+        ".ts",
+        ".tsx",
+        ".py"
+      ],
+      "exclude_patterns": [
+        "www.w3.org",
+        "reactjs.org",
+        "developer.mozilla.org",
+        "schema.org"
+      ],
       "severity": "high",
-      "suggestion": "客戶專屬網域→刪除或參數化(setup_schema);第三方 API 端點→保留但網域記入安裝後設定清單(Egress 白名單),金鑰一律 ctx.secrets.get()"
+      "suggestion": "客戶專屬網域→刪除或參數化;第三方 API 端點→改走 ctx.http.call(<egress-slug>, <path>),base_url 與憑證歸租戶註冊的 EgressService,slug 進 required_egress 與安裝後設定清單"
     },
     {
       "id": "line_channel_artifact",
       "description": "LINE channel 相關硬編碼(channel id / channel secret / access token 樣態)",
       "pattern": "(?i)(channel[_-]?(?:id|secret|access[_-]?token))\\s*[:=]\\s*['\"][A-Za-z0-9+/=_\\-]{8,}['\"]",
-      "extensions": [".ts", ".tsx", ".py", ".json"],
+      "extensions": [
+        ".ts",
+        ".tsx",
+        ".py",
+        ".json"
+      ],
       "severity": "blocker",
       "suggestion": "一律改為 ctx.secrets.get + setup_schema 宣告;掃到即代表租戶憑證外洩到模板"
     },
@@ -65,7 +95,11 @@
       "id": "hardcoded_credentialish",
       "description": "疑似硬編碼憑證(api_key/secret/token/password = 長字串)",
       "pattern": "(?i)(?:api_key|apikey|secret|token|password)\\s*=\\s*['\"][A-Za-z0-9_\\-]{8,}['\"]",
-      "extensions": [".py", ".ts", ".tsx"],
+      "extensions": [
+        ".py",
+        ".ts",
+        ".tsx"
+      ],
       "severity": "blocker",
       "suggestion": "改為 ctx.secrets.get + setup_schema 宣告"
     },
@@ -73,7 +107,9 @@
       "id": "banned_import",
       "description": "沙箱禁用模組 import(os/sys/subprocess/ctypes/socket/shutil/importlib)",
       "pattern": "^\\s*(?:import\\s+(?:os|sys|subprocess|ctypes|socket|shutil|importlib)\\b|from\\s+(?:os|sys|subprocess|ctypes|socket|shutil|importlib)\\b)",
-      "extensions": [".py"],
+      "extensions": [
+        ".py"
+      ],
       "severity": "blocker",
       "suggestion": "移除;沙箱 runtime 禁用這些模組,留著必炸"
     },
@@ -81,7 +117,12 @@
       "id": "email_address",
       "description": "電子郵件位址(可能是客戶聯絡人)",
       "pattern": "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}",
-      "extensions": [".ts", ".tsx", ".py", ".json"],
+      "extensions": [
+        ".ts",
+        ".tsx",
+        ".py",
+        ".json"
+      ],
       "severity": "medium",
       "suggestion": "客戶信箱→刪除或改為 demo 資料;通知收件人→參數化"
     },
@@ -89,7 +130,11 @@
       "id": "app_domain_literal",
       "description": "app_domain 字串常值(SaaS 表 custom_data.app_domain 慣例)",
       "pattern": "app_domain['\"]?\\s*[:=]\\s*['\"]([^'\"\\n]+)['\"]",
-      "extensions": [".ts", ".tsx", ".py"],
+      "extensions": [
+        ".ts",
+        ".tsx",
+        ".py"
+      ],
       "severity": "info",
       "capture": true,
       "suggestion": "確認 app_domain 命名與新 slug 一致(轉換後應統一改為新模板 slug)"
@@ -98,7 +143,9 @@
       "id": "print_in_action",
       "description": "action 內使用 print()(規範要求 ctx.log)",
       "pattern": "^\\s*print\\s*\\(",
-      "extensions": [".py"],
+      "extensions": [
+        ".py"
+      ],
       "severity": "medium",
       "suggestion": "改用 ctx.log()"
     }

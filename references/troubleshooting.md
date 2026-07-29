@@ -33,12 +33,13 @@
 | S7 寫後回讀不符 | 平台改寫/丟棄欄位 | 人工比對送出與回讀內容;確認平台版本行為後回報 |
 | S8 action 全部 503 | runner 未配置 | 平台側設定;e2e 記 SKIP,送審前向用戶明確標注此風險 |
 | S8 approval_status: pending | 租戶簽核流程攔截 | **非失敗、不可重試**(重試 = 重複建單);記 WARN 即可 |
-| S8 action 需要真實憑證 | dummy secret 打不通第三方 | `--secrets-file` 給測試值,或 `--expect` 宣告 allow_fail 並向用戶說明 |
+| S8 action 需要真實憑證 | 第三方憑證歸 EgressService(閘道注入),dummy 註冊打不通 | `--egress-file` 給 slug 的真實 base_url/auth_config(業務型金鑰才走 `--secrets-file`);或 `--expect` 宣告 allow_fail 並向用戶說明 |
 | S9 被擋:e2e 是 quick | 送審要求 full | 重跑 `e2e_devportal.py --slug <slug>`(不帶 --quick) |
 | S9 422「這些 action 尚未成功執行過」 | 平台送審門檻:每支 enabled action 需在最後 deploy 後於沙箱成功跑過(伺服器記錄,不可宣稱) | 補真憑證(`--secrets-file`/`--egress-file`)重跑 full;真跑不通的在 manifest 設 `is_enabled:false` 停用後重新 push |
 | preflight warn:egress 未宣告 | 程式碼用了 `ctx.http.call(slug)` 但 metadata 缺 `required_egress` | 重跑 `normalize_meta.py`(會自動從盤點補宣告)→ 重新 push |
 | 沙箱寫入/測試 403 | read_only 帳號(2026-07-28 起沙箱寫入需 editor) | 請 admin 升級帳號 |
-| 對外呼叫被擋(egress) | 網域不在租戶白名單 | **停止改 code**;引導用戶到後台 `/dashboard/settings/integrations` 加網域 |
+| 對外呼叫被擋/401(egress) | 租戶未以同名 slug 註冊 EgressService,或 action 自帶 Authorization(閘道會剝掉) | **停止改 code**;引導用戶到後台 `/dashboard/settings/integrations` 註冊 slug(base_url + 憑證);action 端移除自帶憑證 |
+| action 對外連線 timeout(~20s) | action 用 raw httpx/requests 直連——runner 是 default-deny egress | 改寫為 `ctx.http.call("<slug>", "<path>")`(回 Phase 3 補裁決);這是架構限制,重試無效 |
 
 ## 查不到怎麼辦
 

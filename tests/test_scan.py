@@ -43,6 +43,23 @@ class TestScan(unittest.TestCase):
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0]["captured"], "LINE_TOKEN")
 
+    def test_raw_http_outbound_flagged(self):
+        (self.template / "actions" / "ext.py").write_text(
+            'import httpx\n\ndef execute(ctx):\n    httpx.get("https://x.example.com", timeout=30)\n',
+            encoding="utf-8")
+        findings = self.scan()
+        hits = [f for f in findings if f["rule"] == "raw_http_outbound"]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["severity"], "high")
+        self.assertIn("ctx.http.call", hits[0]["suggestion"])
+
+    def test_ctx_http_call_not_flagged_as_outbound(self):
+        (self.template / "actions" / "gw.py").write_text(
+            'def execute(ctx):\n    ctx.http.call("openai", "/v1/responses", method="POST")\n',
+            encoding="utf-8")
+        findings = self.scan()
+        self.assertFalse(any(f["rule"] == "raw_http_outbound" for f in findings))
+
     def test_uuid_in_tsx(self):
         (self.template / "src").mkdir()
         (self.template / "src" / "Page.tsx").write_text(
