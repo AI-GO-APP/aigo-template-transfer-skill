@@ -14,17 +14,20 @@ description: >
 
 ## Phase -1:Skill 自我更新檢查(每次觸發時執行)
 
-> 若已裝 SessionStart hook(見 README「自動更新檢查」),本階段會自動被跳過(節流),
-> 不必重複執行。
+> 若已裝 SessionStart hook(見 README「保持更新」;Claude Code 與 Codex 都有範本),
+> 本階段會自動被跳過(節流),不必重複執行。
 
 ```bash
 python scripts/check_update.py     # macOS / Linux 用 python3
 ```
 
-- **無輸出 = 沒事**:已最新、離線、或 24 小時內已檢查過都會靜默結束。
+- **無輸出 = 沒事**:已最新、離線、或 24 小時內已檢查過都會靜默結束,直接進 Phase 0。
 - **有輸出 = 有新版**:把版本落差與變更摘要告知使用者,**詢問是否更新**;
-  同意 → 執行腳本印出的更新指令,完成後重新讀取 SKILL.md 讓新版在本回合生效。
-- **絕不自動覆寫**:未取得同意前不要執行更新指令。
+  同意 → 執行腳本印出的更新指令,完成後**重新讀取 SKILL.md 與相關 references**,
+  讓新版規則在本回合就生效(舊版已在 context 裡,不重讀會沿用舊教義)。
+- **絕不自動覆寫**:使用者可能改過本地檔案;未取得同意前不要執行更新指令。
+- 需要機器可讀結果時用 `--json`(一律輸出,`status` 為
+  `skipped`/`unknown`/`current`/`outdated`)。
 
 ## 鐵律(先讀)
 
