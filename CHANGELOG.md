@@ -25,6 +25,10 @@
   suggestion 改為 `ctx.http.call` + `required_egress` + 不自帶憑證。
 - `SKILL.md` Phase 3 範例、`references/pollution-signals.md` 同步改寫;
   「安裝後設定清單」的 egress 條目改以 slug 為主、網域為輔。
+- 審查補齊(PR #1 review):`hardcoded_url` suggestion、troubleshooting 三列
+  (egress 401/timeout/真憑證歸 EgressService)、SKILL Phase 8 判讀、
+  template-contract 的 required_egress 敘述——清除殘留的舊 httpx 教義;
+  新增 `raw_http_outbound` 掃描規則測試 ×2。
 
 ## 0.3.4
 

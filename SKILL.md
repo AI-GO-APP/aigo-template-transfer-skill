@@ -249,8 +249,9 @@ python scripts/e2e_devportal.py --slug <slug> --quick      # 快速檔(迭代中
 - **dummy 金鑰下的 pass 不等於完整可用性**:action 可能只走到早退路徑
   (如驗簽失敗即回)就回 2xx,深層邏輯並未執行。向用戶摘報時凡以 dummy 值
   通過的 action 都要標注「淺層通過」;正式上架品質以真值測試為準。
-- 需要真實第三方憑證的 action:向用戶要 e2e 測試值(`--secrets-file`),
-  或在 `--expect` 的 `allow_fail_actions` 宣告並說明。
+- 需要真實第三方連線的 action:第三方憑證歸 EgressService——用 `--egress-file`
+  給 slug 的真實 base_url/auth_config;業務型金鑰(非 Authorization 用途)才走
+  `--secrets-file`。都給不了就在 `--expect` 的 `allow_fail_actions` 宣告並說明。
 - runner 503 = 平台側未開 action runner → 記 SKIP;送審前向用戶明確標注此風險。
 - `approval_status: "pending"` / 簽核例外 → 記 WARN,**非失敗、不可重試**
   (重試 = 重複建單 + 重複開簽核單)。

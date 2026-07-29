@@ -76,7 +76,7 @@
         "schema.org"
       ],
       "severity": "high",
-      "suggestion": "客戶專屬網域→刪除或參數化(setup_schema);第三方 API 端點→保留但網域記入安裝後設定清單(Egress 白名單),金鑰一律 ctx.secrets.get()"
+      "suggestion": "客戶專屬網域→刪除或參數化;第三方 API 端點→改走 ctx.http.call(<egress-slug>, <path>),base_url 與憑證歸租戶註冊的 EgressService,slug 進 required_egress 與安裝後設定清單"
     },
     {
       "id": "line_channel_artifact",
