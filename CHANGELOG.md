@@ -4,6 +4,26 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.5.0
+
+更新檢查機制與 aigo-app-builder-skill 對齊(使用者持續拿到最新版的保證機制):
+
+- **修正:離線會燒掉節流。** 舊版在抓遠端**之前**就寫 `last_check`,使用者斷網一次
+  就要等 24 小時才會再檢查。改為**抓取成功才記節流**,離線時下次仍會嘗試。
+- **修正:`--json` 在已是最新/離線時完全不輸出**,機器可讀模式形同失效。改為一律輸出,
+  含 `status`(`skipped`/`unknown`/`current`/`outdated`)與版本資訊。
+- **修正:`--apply` 無逾時與失敗判讀。** 補 60 秒逾時、`returncode` 檢查、
+  分岔/未提交修改的明確訊息;非 git(skills CLI 複製)安裝改回報「無法就地 pull」
+  而不是靜默無事。
+- **新增 Codex CLI SessionStart hook 範本**(`resources/hooks/codex.config.example.toml`),
+  與既有 Claude Code 範本並列;README 改寫「保持更新」章節說明兩種安裝路徑與時序差異
+  (hook 在 Skill 載入前跑,Phase -1 在載入後跑、更新後需重讀 SKILL.md)。
+- 重構為 `check()` 回傳結構化結果(對齊 builder 的 status 語義),行為可測。
+- 新增 `tests/test_check_update.py`(21 例):版號比較與 pre-release 排序、
+  CHANGELOG 區段擷取、節流/離線/損毀狀態檔、更新指令分流、repo 指向自我檢查
+  (vendor 自 builder 時最易漏改 REPO 常數)。
+  含一條回歸鎖:遠端拿到非版號字串(抓到 HTML/404 頁)一律靜默,不對使用者誤報更新。
+
 ## 0.4.0
 
 - **鐵律 6 反轉:對外呼叫回到 `ctx.http.call` 閘道,不是 raw httpx。** 原規則

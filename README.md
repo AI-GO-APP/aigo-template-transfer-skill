@@ -28,12 +28,39 @@ uv sync          # 或 pip install httpx(scripts 唯一第三方相依)
 Claude Code:把本目錄放進 `.claude/skills/` 或以 `--add-dir` 掛入;
 Antigravity / Cursor:把 `SKILL.md` 加入 agent 的 rules/context。
 
-### 自動更新檢查(建議)
+## 保持更新
 
-Skill 內建 `scripts/check_update.py`(零相依、離線靜默、24h 節流、絕不自動覆寫)。
-把 `resources/hooks/claude-code.settings.example.json` 的 hooks 區塊合併進
-`~/.claude/settings.json`,SessionStart 時自動檢查;或每次觸發 skill 時由
-Phase -1 手動執行。更新一律 `git pull --ff-only`,有本地修改不會被覆蓋。
+Skill 內含版本標記(`VERSION`)與更新檢查腳本(`scripts/check_update.py`),
+比對本地與 GitHub 上的 `VERSION`,有新版才提示。腳本零相依(只用 Python 標準函式庫、
+不經 uv),離線或逾時一律靜默略過,預設 24 小時內只檢查一次
+(狀態存在 `~/.aigo-transfer/update_check.json`;**離線那次不算**,下次仍會嘗試)。
+
+**任何 agent 都適用(預設)**:`SKILL.md` 的 Phase -1 會在每次 Skill 觸發時執行檢查,
+有新版時由 AI 告知你並詢問是否更新。缺點是 `SKILL.md` 已載入 context,更新後需重新讀取
+才會在當回合生效。
+
+**Claude Code / Codex(推薦加裝)**:改用 SessionStart hook,在 Skill 載入**之前**完成檢查,
+沒有上述時序問題。範本在 `resources/hooks/`,把 `<SKILL_DIR>` 換成本機 skill 路徑後合併進設定:
+
+| Agent | 設定檔 | 範本 |
+|-------|--------|------|
+| Claude Code | `~/.claude/settings.json` 或 `<專案>/.claude/settings.json` | `resources/hooks/claude-code.settings.example.json` |
+| Codex CLI(>= v0.124.0) | `~/.codex/config.toml` 或 `<repo>/.codex/config.toml` | `resources/hooks/codex.config.example.toml` |
+
+手動檢查與更新:
+
+```bash
+python scripts/check_update.py --force   # 忽略節流立即檢查(macOS/Linux 用 python3)
+python scripts/check_update.py --json    # 機器可讀輸出(一律輸出,含 status)
+python scripts/check_update.py --apply   # git 安裝:就地 pull --ff-only
+```
+
+`--apply` 只在 skill 目錄是 git repo 時才會實際更新;用 `npx skills add` 安裝的複製式安裝
+會印出 `npx skills update` 讓你自己執行。任一情況都**不會**覆寫你的本地修改
+(`--ff-only` 遇到分岔會直接失敗)。
+
+> 維護者注意:改動 Skill 內容後要同步 bump `VERSION` 並在 `CHANGELOG.md` 補一節,
+> 否則使用者端不會收到更新提示。
 
 ## 快速開始
 
