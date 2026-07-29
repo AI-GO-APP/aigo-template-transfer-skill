@@ -4,6 +4,15 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.3.4
+
+- 對照平台 PR #35–#39:契約零變動,skill 程式無需更新。
+  - #38(沙箱 ctx.log shim)暴露判讀盲點:dummy 金鑰下 action 的 pass 可能只覆蓋
+    早退路徑——SKILL.md e2e 判讀規則新增「淺層通過」標注要求。
+  - #39 修正 preflight 對 data_center_schema.tables(陣列)的解析,帶 DSL 表的
+    模板現在可正常過 preflight(本 skill 產出的一直是正式陣列形狀,不受影響)。
+  - #36/#37:平台 API 手冊的「既有應用轉模組」入口正式指向本 skill repo。
+
 ## 0.3.3
 
 - 對照 developer 平台 PR #33(admin tag 治理):修正 push 前置 tags 驗證解析
