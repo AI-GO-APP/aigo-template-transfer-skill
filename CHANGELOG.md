@@ -4,6 +4,51 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.5.1
+
+### 修正:e2e 表 CRUD 打錯端點面(帶自建表的模板 S8 必然失敗)
+
+平台的資料面有兩組:`data_center_schema` 宣告的**自建表**走 data_table SDK 面
+(`/data/objects/{key}/records`),`data_references_schema` 宣告的**引用表**走
+proxy SDK 面(`/proxy/...`,平台端有 `assert_table` 硬驗 AI GO 快照)。
+
+0.3.4 以前的 `e2e_devportal.py` Phase 3 把 `data_center_schema` 的表名餵給
+`/proxy`,一律回 404「AI GO 無此表」→ `hard_fail` → **任何帶自建表的模板 S8 都過不了**,
+而真正該測的 `/data/objects/` 從沒被呼叫過;`data_references_schema` 宣告的表則
+完全沒被 CRUD 測到。已於正式平台實測復現與修復。
+
+- 新增 `scripts/devportal_paths.py`:兩個面的路徑組裝與樣本列產生,純函式、有單元測試。
+- Phase 3 拆成 3a 自建表 / 3b 引用表,各自打正確端點。
+- CRUD 由 `insert+list` 加深為 `insert→list→(query)→update→delete`,
+  並刪掉自己插入的列,不再留測試髒資料。
+- 引用表的樣本列改依 `GET /refs/tables/{t}/columns` 的真實欄位型別產生
+  (只填 NOT NULL 非系統欄,跳過 UUID 外鍵)。
+
+### 修正:submit 成功之後才炸的 TypeError
+
+`common.mark_stage()` 的 `status` 是位置參數,`cmd_submit` 又從 `**extra` 傳同名鍵
+→ `TypeError`。發生在**送審已經成功之後**,用戶只看到 traceback,會誤以為沒送出去
+(實際上已進審核佇列)。改名為 `review_status`。
+
+### 新增:補上會擋住真實工作流的端點
+
+| 指令 | 端點 | 先前的處境 |
+|---|---|---|
+| `devportal.py bump` | `POST /modules/{mid}/versions` | 已發布模組要出下一版無路可走,只能叫用戶回 Web UI |
+| `devportal.py withdraw` | `POST .../withdraw` | 錯誤訊息叫用戶「先 withdraw」,但 skill 沒實作 |
+| `devportal.py events` | `GET .../events` | 只 POST 不讀,送審門檻只能靠本地推算 |
+| `devportal.py pull` | `GET .../files/content` | 無法取回平台上的內容(ai-go-templates 已關閉後尤其要緊) |
+| `devportal.py live-templates` | `GET /live-templates` | SKILL.md 叫 agent 看,但沒有腳本 |
+| `devportal.py adopt` | `POST /live-templates/{slug}/adopt` | 完全沒提;**不可逆**,故帶人工確認閘 |
+
+- `push` 前置驗證 `data_references_schema`(`GET /refs/available-tables` +
+  `.../columns`):引用不存在的表/欄位直接擋下,不必等推完檔才被 preflight fail。
+- e2e 的 `submit-gate` 改為跟伺服器對帳(讀事件、比對最後一次 deploy 之後的
+  `detail.status==success`),取代原本用本地報告推算的作法。
+- `bump` 會重置 S8/S9——新版本沒測過,舊綠燈不可沿用。
+- 修正 `GET /live-templates` 的回應解析:形狀是 `{templates: [...], source}`
+  而非裸陣列,可否接管以 `can_adopt` 為準(對齊 0.3.3 讀錯 `/refs/tags` 回應鍵的教訓)。
+
 ## 0.5.0
 
 更新檢查機制與 aigo-app-builder-skill 對齊(使用者持續拿到最新版的保證機制):
@@ -49,6 +94,7 @@
   (egress 401/timeout/真憑證歸 EgressService)、SKILL Phase 8 判讀、
   template-contract 的 required_egress 敘述——清除殘留的舊 httpx 教義;
   新增 `raw_http_outbound` 掃描規則測試 ×2。
+
 
 ## 0.3.4
 
