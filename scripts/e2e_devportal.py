@@ -136,7 +136,7 @@ def main() -> None:
             hard_fail = True
 
     # Phase 3: 表 CRUD——**自建表與引用表是兩個不同的端點面**,見 devportal_paths 檔頭。
-    # 3a 自建表(data_center_schema)走 data_table SDK 面 /data/objects/{key}/records;
+    # 3a 自建表(data_center_schema)走 data_table SDK 面 /data-center/tables/{key}/records;
     # 3b 引用表(data_references_schema)走 proxy SDK 面 /proxy/...(平台會驗 AI GO 快照)。
     # 兩者互餵必定 404,且 0.3.4 以前的 e2e 正是把自建表餵給 /proxy。
 
@@ -145,7 +145,7 @@ def main() -> None:
         """insert → list → (query) → update → delete。
 
         兩個面的 insert 與 list 都是同一個 base(POST/GET 同路徑);update/delete
-        則因面而異(自建表以 record id 反查、引用表帶表名),故由 record_path 組。
+        則因面而異(路徑形狀不同,兩面都帶表名但層級不一樣),故由 record_path 組。
         會刪掉自己插的列,不留測試髒資料。
         """
         nonlocal hard_fail
@@ -198,7 +198,7 @@ def main() -> None:
             f"crud:自建表 {tkey}",
             paths.data_records(vid, tkey, access_mode),
             {"data": paths.sample_for_fields(table.get("fields"))},
-            lambda rid: paths.data_record(vid, rid, access_mode),
+            lambda rid, _k=tkey: paths.data_record(vid, _k, rid, access_mode),
         )
 
     def refs_readonly(label: str, tname: str, why: str) -> None:

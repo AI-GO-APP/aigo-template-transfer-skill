@@ -2,16 +2,21 @@
 
 平台有兩組長得像、語意完全不同的資料端點,餵錯表名 100% 404:
 
-| metadata 欄位                | 語意             | 沙箱端點                       | SDK        |
-|------------------------------|------------------|--------------------------------|------------|
-| `data_center_schema.tables[]`| 模板**自建**表   | `/data/objects/{key}/records`  | data_table |
-| `data_references_schema[]`   | 引用 AI GO 既有表| `/proxy/{app_id}/{table}`      | proxy      |
+| metadata 欄位                | 語意             | 沙箱端點                              | SDK        |
+|------------------------------|------------------|---------------------------------------|------------|
+| `data_center_schema.tables[]`| 模板**自建**表   | `/data-center/tables/{key}/records`   | data_table |
+| `data_references_schema[]`   | 引用 AI GO 既有表| `/proxy/{app_id}/{table}`             | proxy      |
+
+自建表這一面的路徑在平台端換過:舊的 `/data/objects/{slug}/records` **已隨 AI GO 退場**
+(見 ai-go-developer `backend/app/api/sandbox.py` 的 `_data_center_router` 檔頭註解),
+現行是 `/data-center/tables/{table}/records`,且 update/delete **要帶表名**
+(舊面是以 record id 全域反查)。舊面在平台上回 404,任何帶自建表的模板 S8 必然 hard_fail。
 
 `/proxy` 與 `/tables/{t}/seed|rows` 這一面在平台端有 `assert_table` 硬驗 AI GO
 快照(ai-go-developer `ctx_core/sandbox.py`),自建表名打過去一律回 404
 「AI GO 無此表」。0.3.4 以前的 e2e 正是把 `data_center_schema` 的表名餵給
-`/proxy`,任何帶自建表的模板 S8 必然 hard_fail,而真正該測的
-`/data/objects/` 從沒被呼叫過。
+`/proxy`,任何帶自建表的模板 S8 必然 hard_fail,而真正該測的自建表那一面
+從沒被呼叫過。
 
 external 模板走 `ext/` 前綴且不帶 app_id,故所有組裝都吃 access_mode。
 本模組**純函式、不做 I/O**,可單元測試。
@@ -61,15 +66,23 @@ def declared_refs(meta: dict) -> list[dict]:
 
 # ── 自建表(data_table SDK 面)────────────────────────────────
 
+def _dc_prefix(access_mode: str | None) -> str:
+    return "ext/data-center" if is_external(access_mode) else "data-center"
+
+
+def data_tables(version_id: str, access_mode: str | None) -> str:
+    """列出自建表結構(宣告了但還沒資料的表也會列)。"""
+    return f"/sandbox/v/{version_id}/{_dc_prefix(access_mode)}/tables"
+
+
 def data_records(version_id: str, object_key: str, access_mode: str | None) -> str:
-    prefix = "ext/data" if is_external(access_mode) else "data"
-    return f"/sandbox/v/{version_id}/{prefix}/objects/{object_key}/records"
+    return f"/sandbox/v/{version_id}/{_dc_prefix(access_mode)}/tables/{object_key}/records"
 
 
-def data_record(version_id: str, record_id: str, access_mode: str | None) -> str:
-    """update/delete 的路徑不帶表名——平台以 record id 反查。"""
-    prefix = "ext/data" if is_external(access_mode) else "data"
-    return f"/sandbox/v/{version_id}/{prefix}/records/{record_id}"
+def data_record(version_id: str, object_key: str, record_id: str,
+                access_mode: str | None) -> str:
+    """update/delete 的路徑**帶表名**——新的資料中心面以 (表, id) 定位。"""
+    return f"{data_records(version_id, object_key, access_mode)}/{record_id}"
 
 
 # ── 引用表(proxy SDK 面)──────────────────────────────────────
