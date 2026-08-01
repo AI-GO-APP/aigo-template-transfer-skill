@@ -37,6 +37,9 @@
 | S7 preflight fail | entry/imports/secrets/scopes/actions/manifest | 讀 issues 逐條修;bare import 只支援 5 套件,別加第三方前端依賴 |
 | S7 tags 422 | tags 不在平台白名單 | `GET /refs/tags` 取合法值 |
 | S7 寫後回讀不符 | 平台改寫/丟棄欄位 | 人工比對送出與回讀內容;確認平台版本行為後回報 |
+| S7「引用宣告未經驗證」WARN | 平台部署沒有 `/refs/available-tables` | 非錯誤:該端點不是所有部署都有(權威清單 `GET /dev-docs/endpoints`)。宣告正確性改由 S8 引用表週期實打確認 |
+| S8 引用表**全部** fail | 平台部署沒有 `/refs/tables/{t}/columns`(非模板宣告有誤) | 0.6.1 起自動改走 seed 週期;仍全 fail 才是宣告問題。先自行打 `GET /sandbox/v/{vid}/proxy/{vid}/{table}` 確認:200 = 表沒問題 |
+| S8 引用表 WARN「seed HTTP 5xx」 | 平台產樣本列時出錯(實測 `hr_employees`、`hr_payroll_runs`) | 非模板問題:該表已用 list+query 確認可解析,但**寫入路徑未驗**。摘報時要帶到;要完整驗證只能等平台修 seed |
 | S8 action 全部 503 | runner 未配置 | 平台側設定;e2e 記 SKIP,送審前向用戶明確標注此風險 |
 | S8 approval_status: pending | 租戶簽核流程攔截 | **非失敗、不可重試**(重試 = 重複建單);記 WARN 即可 |
 | S8 action 需要真實憑證 | 第三方憑證歸 EgressService(閘道注入),dummy 註冊打不通 | `--egress-file` 給 slug 的真實 base_url/auth_config(業務型金鑰才走 `--secrets-file`);或 `--expect` 宣告 allow_fail 並向用戶說明 |

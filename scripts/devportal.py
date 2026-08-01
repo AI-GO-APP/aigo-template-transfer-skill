@@ -189,7 +189,12 @@ def cmd_push(args) -> None:
     if refs:
         status, available = api(env, "GET", "/refs/available-tables")
         if status != 200:
-            print(f"[WARN] 讀 /refs/available-tables 失敗(HTTP {status}),略過引用前置檢查")
+            # 這條路徑上「引用宣告有沒有問題」是**未知**,不是「沒問題」——
+            # 講成已驗證會讓人以為 71 張表都對過了,錯誤其實延到 S8 或租戶安裝才炸。
+            print(f"[WARN] 讀 /refs/available-tables 失敗(HTTP {status}):"
+                  f"**引用宣告未經驗證**({len(refs)} 張表)。"
+                  f"該端點不在此平台部署時屬正常(權威清單見 GET /dev-docs/endpoints),"
+                  f"驗證改由 S8 e2e 以沙箱 proxy 實打。")
         else:
             names = {t.get("name") for t in available if isinstance(t, dict)}
             missing = [r["table_name"] for r in refs if r["table_name"] not in names]
@@ -211,7 +216,7 @@ def cmd_push(args) -> None:
                     raise SystemExit(
                         f"[FAIL] 引用表 '{r['table_name']}' 宣告了不存在的欄位:{bad_cols}——"
                         f"實際欄位見 GET /refs/tables/{r['table_name']}/columns")
-        print(f"[OK] 引用宣告已驗證({len(refs)} 張 AI GO 表)")
+            print(f"[OK] 引用宣告已驗證({len(refs)} 張 AI GO 表)")
 
     # 建立或沿用模組(建立時平台自動帶 1.0.0 draft,不可再 POST /versions)
     module_id = state["stages"].get("S7_draft", {}).get("module_id")

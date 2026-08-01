@@ -4,6 +4,40 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.6.1
+
+修正「平台沒有某支 `/refs` 端點」時被誤判成模板宣告錯誤的兩處問題。
+實測環境:developer.ai-go.app,12 支純 Data Reference 模板、71 張引用表。
+該部署的 `GET /dev-docs/endpoints` 底下 `/refs/*` 只有 `/refs/seed-tables` 與 `/refs/tags`。
+
+### 修正:S8 引用表週期在缺 `/refs/tables/{t}/columns` 時全數 fail
+
+`e2e_devportal.py` 取欄位型別是為了組樣本列;該端點 404 時原本直接判
+「AI GO 無此表或不可引用」,於是**每一張**引用表都 fail、S8 不可能過——
+但表其實好好的(`GET /sandbox/v/{vid}/proxy/{vid}/{table}` 回 200)。
+
+改為 404 時走 seed 週期:`POST /sandbox/v/{vid}/tables/{t}/seed` 讓平台自己產生
+合法樣本列(平台知道 schema,免去照型別組樣本),週期為
+seed(代 insert)→ list → query → update → delete,涵蓋面與原 crud_cycle 相同。
+只刪自己 seed 出來的列(seed 前後 id 差集),不動既有沙箱資料;
+表真的不存在時 seed 回 4xx,鑑別力與原本的 columns 查詢一致。
+
+seed 本身回 5xx 時再降一級:實測 `hr_employees`、`hr_payroll_runs` 的
+`POST /sandbox/v/{vid}/tables/{t}/seed` 回 500,但同一張表的 proxy list/query 都是 200——
+平台產樣本列的問題,判成模板宣告錯誤會冤枉模板。改為唯讀驗證(list + query)並記 **WARN**,
+報告裡明寫「寫入路徑未驗」;list/query 也掛才判 fail。
+seed 回 4xx 仍是 hard fail——那是真的沒宣告或不可引用(平台的 404 訊息本身就說得很清楚)。
+
+### 修正:`push` 在略過引用前置檢查後仍印「引用宣告已驗證」
+
+`[OK] 引用宣告已驗證(N 張 AI GO 表)` 原本在 `if/else` 之外無條件執行,
+`/refs/available-tables` 404 走 WARN 分支時照樣印——讀起來像 N 張表都對過了,
+實際上一張都沒驗。已移進 else 分支,WARN 文案改為明講「引用宣告**未經驗證**」
+並指出驗證改由 S8 承擔。
+
+註:`/refs/seed-tables` 不能拿來當可引用表白名單——實測 `sale_order_lines`、
+`delivery_carriers`、`product_templates` 等表不在該清單內,但 proxy 與 seed 都正常。
+
 ## 0.6.0
 
 補上三處「錯了也不會有錯誤訊息」的缺口:抽錯 app、憑證問題延到 S1 才爆、
