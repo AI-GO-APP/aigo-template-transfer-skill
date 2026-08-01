@@ -104,7 +104,7 @@ def referenced_tables(template: Path) -> set[str]:
 
 
 def main() -> None:
-    common.utf8_stdout()
+    common.bootstrap()
     parser = argparse.ArgumentParser(description="S4 Data Center schema")
     parser.add_argument("--slug", required=True)
     mode = parser.add_mutually_exclusive_group(required=True)

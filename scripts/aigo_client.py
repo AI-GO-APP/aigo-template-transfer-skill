@@ -6,7 +6,8 @@
 - Agent 絕不在對話中向用戶要密碼、絕不代填;憑證一律由用戶自己寫進 .env。
 - Token 取得順序:AIGO_TOKEN 環境變數/.env > 未過期快取 > refresh_token 換發 >
   .env 帳密登入。全部失敗 → 拋 RuntimeError,訊息內含設定指引,原樣轉給用戶。
-- Token 快取在 .aigo/token.json(已被 .gitignore),密碼不進指令列與 log。
+- Token 快取在 ~/.aigo-transfer/token.json(skill 目錄外,重裝不會被清掉),
+  密碼不進指令列與 log。
 """
 import argparse
 import json
@@ -18,14 +19,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common
 
-CACHE_DIR = common.REPO_ROOT / ".aigo"
-CACHE_FILE = CACHE_DIR / "token.json"
+CACHE_DIR = common.USER_DIR
+CACHE_FILE = common.TOKEN_CACHE_FILE
 
-SETUP_GUIDE = """無法取得 AI GO 憑證。請(用戶本人)在 repo 根目錄的 .env 填入:
+SETUP_GUIDE = f"""無法取得 AI GO 憑證。請(用戶本人)在 {common.ENV_FILE} 填入:
   AIGO_EMAIL=<你的 AI GO 帳號>
   AIGO_PASSWORD=<你的密碼>
 或直接提供 AIGO_TOKEN=<JWT>。帳號需具備 builder.access 權限。
-(.env 已被 .gitignore;密碼不要貼在對話或指令列中)"""
+(該檔在 skill 目錄外,更新或重裝不會被清掉;密碼不要貼在對話或指令列中)"""
 
 
 def _load_cache(base_url: str) -> dict | None:
@@ -39,7 +40,7 @@ def _load_cache(base_url: str) -> dict | None:
 
 
 def _save_cache(base_url: str, payload: dict) -> None:
-    CACHE_DIR.mkdir(exist_ok=True)
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
     CACHE_FILE.write_text(json.dumps({
         "base_url": base_url,
         "access_token": payload["access_token"],
@@ -123,7 +124,7 @@ def whoami(env: dict | None = None) -> dict:
     status, me = api(env, "GET", "auth/me")
     if status != 200:
         raise RuntimeError(f"AI GO /auth/me 失敗(HTTP {status}):{me.get('detail', me)}。"
-                           f"401 代表憑證失效(重設 .env 或刪掉 .aigo/token.json 重登),"
+                           f"401 代表憑證失效(重設 {common.ENV_FILE} 或刪掉 {CACHE_FILE} 重登),"
                            f"403 代表權限不足(請租戶管理員處理,不要繞路)。")
     return me
 
@@ -145,7 +146,7 @@ def cmd_whoami() -> int:
 
 
 def main() -> None:
-    common.utf8_stdout()
+    common.bootstrap()
     parser = argparse.ArgumentParser(description="AI GO 來源側憑證檢查")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("whoami", help="驗證 .env 憑證與 builder.access 權限")

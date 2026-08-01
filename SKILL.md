@@ -54,10 +54,17 @@ python scripts/check_update.py     # macOS / Linux 用 python3
    **`import httpx` 打不出去**:runner pod 是 default-deny egress(ADR-0003,SG 只放行
    ctx-only service),raw httpx/requests 會直接 timeout——沙箱測不過,而送審門檻要求
    每支 enabled action 至少一次 success,等於卡死。
-7. **憑證紀律。** 密碼只存在 `.env`(gitignored)且由**用戶本人**填寫;agent 不代填、
+7. **憑證紀律。** 密碼只存在 `~/.aigo-transfer/.env` 且由**用戶本人**填寫;agent 不代填、
    不在對話中詢問密碼、不把密碼放進指令列。用戶若在對話貼出密碼,提醒改填 `.env` 並更換。
 8. **出錯先查表。** 任何失敗先讀原始 error message 再查
    `references/troubleshooting.md`,不要自行推測修法;權限與設定問題改 code 改不掉。
+
+## 路徑約定
+
+本文件寫的 `.env` 與 `work/<slug>/` 都在使用者資料目錄 `~/.aigo-transfer/` 底下
+(可用 `AIGO_TRANSFER_HOME` 覆寫),**不在 skill 目錄內**——複製式安裝更新時
+skill 目錄會被整個清掉重鋪。腳本輸出一律印絕對路徑,要給用戶路徑時照抄腳本輸出,
+不要自己拼 `<skill>/work/...`。舊版留在 skill 目錄內的資料會在首次執行時自動搬遷。
 
 ## Phase 0:前置檢查(每次開工先跑)
 
@@ -71,7 +78,7 @@ python scripts/aigo_client.py whoami    # 來源側:AI GO 帳號與 builder.acce
   2. 設定頁 https://developer.ai-go.app/settings →「API Token(PAT)」→ 發行(只顯示一次)
   3. `python scripts/devportal.py set-pat` 貼入
 - `level=read_only` → 告知用戶需請平台 admin 升級為 editor,**停在這裡**,不嘗試繞過。
-- 來源側 AI GO 帳號(builder.access):請用戶**本人**在 `.env` 填 `AIGO_EMAIL` /
+- 來源側 AI GO 帳號(builder.access):請用戶**本人**在 `~/.aigo-transfer/.env` 填 `AIGO_EMAIL` /
   `AIGO_PASSWORD`(或 `AIGO_TOKEN`)。`aigo_client.get_token()` 會走
   「token 快取 → refresh 換發 → 帳密登入」,正常情況全程無感;
   拋 RuntimeError 時把訊息原樣轉給用戶(內含設定指引)。

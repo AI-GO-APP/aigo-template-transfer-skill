@@ -1,9 +1,9 @@
-# 認證與秘密 — 絕不入版控
+# 認證、快取與工作區 — 絕不入版控。
+# 0.6.2 起這些都搬到 ~/.aigo-transfer/(見 common.py 的 USER_DIR);
+# 以下規則保留,擋住尚未搬遷的舊資料,以及把 AIGO_TRANSFER_HOME 指進 repo 的情況。
 .env
 .devportal/
 .aigo/
-
-# 轉換工作區(每支 app 的抽取產物、掃描報告、裁決紀錄)
 work/
 
 # Python

@@ -8,7 +8,7 @@
 
 | 狀態碼 | 語義 | 典型處置 |
 |---|---|---|
-| 401 | 認證失效 | PAT 已撤銷/過期 → 重新發行 + `set-pat`;AIGO token → 快取自動換發,仍失敗檢查 .env 帳密 |
+| 401 | 認證失效 | PAT 已撤銷/過期 → 重新發行 + `set-pat`;AIGO token → 快取自動換發,仍失敗檢查 `~/.aigo-transfer/.env` 帳密(必要時刪 `~/.aigo-transfer/token.json` 重登) |
 | 403 | 權限不足 | 分兩種:Developer 端 `read_only`(請 admin 升 editor)/ AI GO 端缺 `builder.access`(請租戶管理員開通)。**不重試、不繞路** |
 | 409 | 衝突或配額 | slug 撞架上模板或他人模組 → 換 slug 重新 init;版本線衝突 → 已有進行中版本,不要 POST /versions |
 | 422 | 輸入不合法 | 讀 detail:metadata 欄位(tags 白名單、category、custom_objects_schema 被擋)或 preflight issues |
@@ -19,6 +19,9 @@
 
 | 症狀 | 成因 | 處置 |
 |---|---|---|
+| 更新 skill 後憑證/工作區不見了 | 0.6.1 以前把 `.env`、`.aigo/`、`work/` 放在 skill 目錄內,複製式安裝(`npx skills add`)更新會 `rm -rf` 整個目錄重鋪 | 0.6.2 起已搬到 `~/.aigo-transfer/`,不會再發生。已經被清掉的只能重設 PAT 與重跑轉換;git 安裝從未受影響 |
+| 啟動時出現「[!] … 新舊兩份都存在」 | 舊資料搬遷時新位置已有同名檔案,腳本一律不覆蓋 | 實際生效的是 `~/.aigo-transfer/` 那份。比對後自行刪掉不要的舊檔——留在 skill 目錄裡的那份下次更新會被清掉 |
+| 啟動時出現「[!] … 搬移失敗」 | 家目錄唯讀、跨磁碟或權限問題 | 舊路徑仍可用(有後備讀取),但仍在被清掉的風險內。手動把檔案搬到 `~/.aigo-transfer/`,或設 `AIGO_TRANSFER_HOME` 指到可寫位置 |
 | 「階段閘:S_x 尚未通過」 | 跳關 | 依序補完前置階段;人工閘用 `transfer_cli.py gate` |
 | 「內容閘:雜湊不符」 | template/ 有閘外變更 | 找出變更來源;合法變更 → `reset --from-stage <變更點>` 重跑;不明變更 → 先查是誰改的 |
 | S1「尚未確認來源 app 的身分」 | 未過來源身分閘 | `acquire.py --list-apps` 找出 uuid → **由用戶**跑 `transfer_cli.py confirm-source`;AI 不得代按 |

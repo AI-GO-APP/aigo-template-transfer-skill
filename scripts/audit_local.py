@@ -226,7 +226,7 @@ def audit_pollution_rescan(work: Path, template: Path) -> list[str]:
 
 
 def main() -> None:
-    common.utf8_stdout()
+    common.bootstrap()
     parser = argparse.ArgumentParser(description="S6 本地 audit 硬閘")
     parser.add_argument("--slug", required=True)
     parser.add_argument("--ai-go-backend", help="ai-go repo 路徑,DSL 用權威 parser 驗證")

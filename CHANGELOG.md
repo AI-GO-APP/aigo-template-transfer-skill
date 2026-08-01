@@ -4,6 +4,54 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.6.2
+
+修正「更新或重裝 skill 會清掉用戶憑證與轉換進度」的資料遺失問題。
+
+### 成因:使用者資料放在 skill 目錄內,而複製式安裝的更新會清空該目錄
+
+`.env`(PAT + AI GO 帳密)、`.aigo/token.json`、`work/<slug>/`(抽取產物、
+`decisions.json`、狀態機)原本都掛在 `common.REPO_ROOT` 底下,也就是 skill 目錄裡。
+
+- **git 安裝**:`git pull --ff-only` 不碰未追蹤檔案,這些檔案安全——原本的行為沒問題。
+- **複製式安裝**(`npx skills add` / `npx skills update`):`skills` CLI 的
+  `update` 會轉呼叫 `add`,而 `installer.ts` 在複製前先跑
+  `cleanAndCreateDirectory()` → `rm(path, { recursive: true, force: true })`。
+  整個 skill 目錄砍掉重鋪,沒有任何 backup 或 preserve 邏輯,
+  三類資料**全部無聲消失**。掉 `work/` 比掉 `.env` 更痛:那是全部人工閘裁決紀錄,
+  重建要用戶把 S0–S9 的確認再走一遍。
+
+README 原本寫「任一情況都不會覆寫你的本地修改」,對複製式安裝是錯的,一併更正。
+
+### 修正:使用者資料搬到 `~/.aigo-transfer/`
+
+`common.py` 新增 `USER_DIR`(預設 `~/.aigo-transfer/`,可用 `AIGO_TRANSFER_HOME`
+覆寫),`ENV_FILE` / `WORK_ROOT` / `TOKEN_CACHE_FILE` 全部改掛在它底下——
+與 `check_update.py` 的節流狀態同一個家目錄。兩種安裝法共用同一條路徑規則,
+不因安裝方式分岔。skill 目錄從此只剩「更新時本來就該被替換」的內容
+(`config/`、`vendor/`、`references/`、`scripts/`)。
+
+新增 `common.bootstrap()`(UTF-8 輸出 + 備妥資料目錄 + 搬遷舊資料),
+取代各 CLI `main()` 開頭的 `common.utf8_stdout()`,10 支腳本統一入口。
+
+### 舊版自動搬遷
+
+首次執行任何腳本時把舊的 `.env`、`.aigo/token.json`、`work/<slug>/` 搬到新家,
+搬遷紀錄印在 **stderr**(多支腳本的 stdout 是機器可讀 JSON,不能污染)。
+
+- 冪等:搬完舊路徑不存在,再跑是零成本的 `exists()` 檢查。
+- **永不覆蓋、永不刪除**:新舊同名時兩份都留著,只印衝突提示讓用戶自己決定。
+- 搬移失敗(唯讀家目錄、跨磁碟)只回報不拋出;`load_env()` 與 `work_dir()`
+  保留讀取舊位置的後備路徑,進行中的轉換不會憑空消失。
+
+`.env` 寫入改走 `common.write_env()`,會建父目錄並盡量 chmod 600。
+
+### 驗證
+
+新增 `tests/test_user_data_dir.py`(19 例,全部把新舊路徑關進 tmpdir,
+避免測試去搬開發者本機真實的 `work/`)。另在拋棄式副本上實跑:
+造舊資料 → 跑 CLI 確認搬遷 → `rm -rf` 整個 skill 目錄重鋪 → 憑證與工作區都還在。
+
 ## 0.6.1
 
 修正「平台沒有某支 `/refs` 端點」時被誤判成模板宣告錯誤的兩處問題。

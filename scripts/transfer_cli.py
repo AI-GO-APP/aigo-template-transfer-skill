@@ -202,7 +202,7 @@ def cmd_reset(args) -> None:
 
 
 def main() -> None:
-    common.utf8_stdout()
+    common.bootstrap()
     parser = argparse.ArgumentParser(description="custom app → template 轉換總入口")
     sub = parser.add_subparsers(dest="cmd", required=True)
 

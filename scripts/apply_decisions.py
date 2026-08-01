@@ -33,7 +33,7 @@ from scan import scan_template
 
 
 def main() -> None:
-    common.utf8_stdout()
+    common.bootstrap()
     parser = argparse.ArgumentParser(description="S3 去租戶化")
     parser.add_argument("--slug", required=True)
     parser.add_argument("--check", action="store_true", help="只檢查裁決完整性,不套用")
