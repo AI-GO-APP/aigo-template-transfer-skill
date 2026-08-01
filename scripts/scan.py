@@ -68,7 +68,7 @@ def scan_template(template: Path, rules_cfg: dict) -> list[dict]:
 
 
 def main() -> None:
-    common.utf8_stdout()
+    common.bootstrap()
     parser = argparse.ArgumentParser(description="S2 污染掃描")
     parser.add_argument("--slug", required=True)
     parser.add_argument("--rescan", action="store_true",

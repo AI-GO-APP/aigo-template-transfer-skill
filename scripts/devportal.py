@@ -33,13 +33,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common
 import devportal_paths as paths
 
-ENV_TEMPLATE = """# Developer 平台(本檔已被 .gitignore,不會進版控)
+ENV_TEMPLATE = """# 本檔在 skill 目錄外(~/.aigo-transfer/),更新或重裝 skill 不會被清掉,也不進版控。
 DEVPORTAL_API=https://developer.ai-go.app/api/v1
 DEVPORTAL_PAT=
 
 # 來源側 AI GO(抽取線上 app / 撈 Data Center 表用,帳號需 builder.access)
 # 憑證由用戶本人填寫;AI agent 不代填、不在對話中詢問密碼。
-# 有 AIGO_TOKEN 就用 token;否則用帳密自動換發並快取到 .aigo/token.json。
+# 有 AIGO_TOKEN 就用 token;否則用帳密自動換發並快取到同目錄的 token.json。
 AIGO_BASE_URL=https://ai-go.app
 AIGO_EMAIL=
 AIGO_PASSWORD=
@@ -67,7 +67,7 @@ def cmd_setup(args) -> None:
     if common.ENV_FILE.exists():
         print(f".env 已存在:{common.ENV_FILE}(未覆蓋)")
     else:
-        common.ENV_FILE.write_text(ENV_TEMPLATE, encoding="utf-8")
+        common.write_env(ENV_TEMPLATE)
         print(f"已建立 {common.ENV_FILE}")
     print(PAT_GUIDE)
 
@@ -81,7 +81,7 @@ def cmd_set_pat(args) -> None:
     lines = common.ENV_FILE.read_text(encoding="utf-8").splitlines() if common.ENV_FILE.exists() else []
     lines = [ln for ln in lines if not ln.strip().startswith("DEVPORTAL_PAT=")]
     lines.append(f"DEVPORTAL_PAT={pat}")
-    common.ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    common.write_env("\n".join(lines) + "\n")
     env = common.load_env()
     status, me = api(env, "GET", "/auth/me")
     if status != 200:
@@ -534,7 +534,7 @@ def cmd_adopt(args) -> None:
 
 
 def main() -> None:
-    common.utf8_stdout()
+    common.bootstrap()
     parser = argparse.ArgumentParser(description="Developer 平台整合")
     sub = parser.add_subparsers(dest="cmd", required=True)
 

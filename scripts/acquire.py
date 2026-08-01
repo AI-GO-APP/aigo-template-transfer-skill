@@ -326,7 +326,7 @@ def shape_check(template: Path) -> list[str]:
 
 
 def main() -> None:
-    common.utf8_stdout()
+    common.bootstrap()
     parser = argparse.ArgumentParser(description="S1 抽取正規化")
     parser.add_argument("--slug", help="工作區 slug(--list-apps 以外必填)")
     source = parser.add_mutually_exclusive_group()

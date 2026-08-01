@@ -103,7 +103,7 @@ def record_meta_proposal(work: Path, template: Path) -> bool:
 
 
 def main() -> None:
-    common.utf8_stdout()
+    common.bootstrap()
     parser = argparse.ArgumentParser(description="建立單一合規 _template_meta.json")
     parser.add_argument("--slug", required=True)
     parser.add_argument("--name")

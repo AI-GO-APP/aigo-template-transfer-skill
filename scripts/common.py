@@ -1,5 +1,8 @@
 """共用基礎:UTF-8 輸出、.env 讀取、HTTP、狀態機、工作區與裁決檔。
 
+使用者資料(憑證、token 快取、轉換工作區)一律放在 skill 目錄**之外**的
+`~/.aigo-transfer/`,原因見 USER_DIR 附近註解——複製式安裝更新時會清空 skill 目錄。
+
 狀態機是整個 skill 的「嚴謹每階段判斷」承載體:
 - 階段順序固定(STAGES);跑 S(n) 前,S(0)..S(n-1) 必須全部 passed(選配階段除外)。
 - 每個會改動/依賴 template/ 內容的階段,pass 時記錄當下內容雜湊到 state["last_hash"]。
@@ -10,6 +13,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -17,7 +21,34 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = REPO_ROOT / "config"
-ENV_FILE = REPO_ROOT / ".env"
+
+# ── 使用者資料目錄 ──────────────────────────────────────────────
+# 憑證、token 快取、轉換工作區都放在 skill 目錄外。**不要搬回去**:
+# 複製式安裝(`npx skills add`)的更新會把整個 skill 目錄 rm -rf 再重鋪
+# (vercel-labs/skills `installer.ts` 的 cleanAndCreateDirectory),
+# 放在裡面的 .env / token / work/ 會被無聲清光。git 安裝雖然 pull 不碰
+# 未追蹤檔案,但仍共用同一條路徑規則,避免兩種安裝法行為分岔。
+# 與 check_update.py 的節流狀態同一個家目錄。
+HOME_OVERRIDE_KEY = "AIGO_TRANSFER_HOME"
+
+
+def _resolve_user_dir() -> Path:
+    override = os.environ.get(HOME_OVERRIDE_KEY)
+    if override:
+        return Path(override).expanduser().resolve()
+    return Path.home() / ".aigo-transfer"
+
+
+USER_DIR = _resolve_user_dir()
+ENV_FILE = USER_DIR / ".env"
+WORK_ROOT = USER_DIR / "work"
+TOKEN_CACHE_FILE = USER_DIR / "token.json"
+
+# 舊版(<= 0.6.1)放在 skill 目錄內的位置;bootstrap() 會搬遷過來
+LEGACY_ENV_FILE = REPO_ROOT / ".env"
+LEGACY_WORK_ROOT = REPO_ROOT / "work"
+LEGACY_TOKEN_DIR = REPO_ROOT / ".aigo"
+LEGACY_TOKEN_FILE = LEGACY_TOKEN_DIR / "token.json"
 
 DEVPORTAL_DEFAULT_API = "https://developer.ai-go.app/api/v1"
 AIGO_DEFAULT_BASE = "https://ai-go.app"
@@ -55,11 +86,86 @@ def utf8_stdout() -> None:
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 
+def _migrate_one(src: Path, dst: Path, label: str, notes: list[str]) -> None:
+    """搬一個路徑到新家。目標已存在一律不覆蓋,只回報衝突讓用戶自己決定。"""
+    if not src.exists():
+        return
+    if dst.exists():
+        notes.append(
+            f"[!] {label} 新舊兩份都存在:實際生效的是 {dst};"
+            f"舊的 {src} 未被搬移,若確認不需要請自行刪除"
+            f"(它在複製式安裝更新時會被清掉)。"
+        )
+        return
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dst))
+    except OSError as exc:
+        notes.append(f"[!] {label} 搬移失敗({src} → {dst}):{exc}。"
+                     f"舊路徑仍可用,但複製式安裝更新時會被清掉,請手動搬移。")
+        return
+    notes.append(f"[遷移] {label}:{src} → {dst}")
+
+
+def migrate_legacy_user_data() -> list[str]:
+    """把舊版(<= 0.6.1)留在 skill 目錄內的憑證/快取/工作區搬到 USER_DIR。
+
+    冪等:搬完舊路徑就不存在,再跑一次是零成本的 exists() 檢查。
+    永不覆蓋既有檔案、永不刪除資料——最壞情況是回報衝突後什麼都不做。
+    """
+    notes: list[str] = []
+    _migrate_one(LEGACY_ENV_FILE, ENV_FILE, ".env 憑證", notes)
+    _migrate_one(LEGACY_TOKEN_FILE, TOKEN_CACHE_FILE, "token 快取", notes)
+
+    if LEGACY_WORK_ROOT.is_dir():
+        for entry in sorted(LEGACY_WORK_ROOT.iterdir()):
+            if entry.is_dir():
+                _migrate_one(entry, WORK_ROOT / entry.name, f"工作區 {entry.name}", notes)
+
+    # 搬空後把留下的空殼收掉;非空(還有衝突或雜檔)就原樣留著
+    for stale in (LEGACY_TOKEN_DIR, LEGACY_WORK_ROOT):
+        try:
+            stale.rmdir()
+        except OSError:
+            pass
+    return notes
+
+
+def bootstrap() -> None:
+    """所有 CLI 的統一開場:UTF-8 輸出 → 備妥使用者資料目錄 → 搬遷舊版資料。
+
+    遷移提示一律走 stderr:多支腳本的 stdout 是給機器讀的 JSON,不能污染。
+    """
+    utf8_stdout()
+    try:
+        USER_DIR.mkdir(parents=True, exist_ok=True)
+        os.chmod(USER_DIR, 0o700)
+    except OSError:
+        pass  # 權限或唯讀家目錄;真正需要寫入時會拋出更具體的錯
+    for note in migrate_legacy_user_data():
+        print(note, file=sys.stderr)
+
+
+def write_env(text: str) -> None:
+    """寫入 .env 並盡量收緊權限(Windows 上 chmod 不一定生效)。"""
+    ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ENV_FILE.write_text(text, encoding="utf-8")
+    try:
+        os.chmod(ENV_FILE, 0o600)
+    except OSError:
+        pass
+
+
 def load_env() -> dict[str, str]:
-    """讀 repo 根 .env;真實環境變數優先(CI 或臨時覆寫)。"""
+    """讀 USER_DIR/.env;真實環境變數優先(CI 或臨時覆寫)。
+
+    新位置不存在時退回舊的 skill 目錄內 .env——bootstrap() 通常已搬走,
+    這條後備是給「直接 import common 而沒跑 bootstrap」的呼叫端兜底。
+    """
     env: dict[str, str] = {}
-    if ENV_FILE.exists():
-        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+    source = ENV_FILE if ENV_FILE.exists() else LEGACY_ENV_FILE
+    if source.exists():
+        for line in source.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
@@ -92,7 +198,12 @@ def http_call(method: str, url: str, *, body: Any = None, token: str | None = No
 # ── 工作區 ──────────────────────────────────────────────────────
 
 def work_dir(slug: str) -> Path:
-    return REPO_ROOT / "work" / slug
+    """工作區在 USER_DIR/work/<slug>。新位置還不存在、而舊位置有東西時沿用舊的
+    (同 load_env 的理由:給沒跑 bootstrap 的呼叫端兜底,不讓進行中的轉換憑空消失)。"""
+    new = WORK_ROOT / slug
+    if not new.exists() and (LEGACY_WORK_ROOT / slug).is_dir():
+        return LEGACY_WORK_ROOT / slug
+    return new
 
 
 def state_path(work: Path) -> Path:

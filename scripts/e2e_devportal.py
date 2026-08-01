@@ -45,7 +45,7 @@ def run_phase(report: list, name: str, status: str, detail: str = "") -> None:
 
 
 def main() -> None:
-    common.utf8_stdout()
+    common.bootstrap()
     parser = argparse.ArgumentParser(description="S8 Developer 沙箱 e2e")
     parser.add_argument("--slug", required=True)
     parser.add_argument("--quick", action="store_true",

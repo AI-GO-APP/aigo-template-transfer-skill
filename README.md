@@ -32,6 +32,27 @@ uv sync          # 或 pip install httpx(scripts 唯一第三方相依)
 Claude Code:把本目錄放進 `.claude/skills/` 或以 `--add-dir` 掛入;
 Antigravity / Cursor:把 `SKILL.md` 加入 agent 的 rules/context。
 
+## 你的資料放在哪(不會被更新洗掉)
+
+憑證與轉換進度一律存在 skill 目錄**外**的 `~/.aigo-transfer/`:
+
+| 路徑 | 內容 |
+|---|---|
+| `~/.aigo-transfer/.env` | `DEVPORTAL_PAT`、`AIGO_EMAIL`/`AIGO_PASSWORD` 等憑證 |
+| `~/.aigo-transfer/token.json` | AI GO token 快取(可拋棄,刪了會重登) |
+| `~/.aigo-transfer/work/<slug>/` | 各模板的抽取產物、掃描報告、`decisions.json`、狀態機 |
+| `~/.aigo-transfer/update_check.json` | 更新檢查節流狀態 |
+
+**為什麼不放 skill 目錄裡**:複製式安裝(`npx skills add`)的更新流程會把整個
+skill 目錄 `rm -rf` 後重鋪(`vercel-labs/skills` 的 `installer.ts`),放在裡面的
+憑證與工作區會被無聲清光。放在外面後,更新、重裝、換安裝方式都不影響你的資料。
+
+要換位置就設 `AIGO_TRANSFER_HOME=<路徑>`(多人共用機器或想跟著專案走時有用)。
+
+從 0.6.1 以前升上來的話,首次執行任何腳本會自動把舊的 `.env`、`.aigo/token.json`、
+`work/<slug>/` 搬到新家並在 stderr 印出搬遷紀錄;新舊同名時**一律不覆蓋**,
+只提示衝突讓你自己決定。
+
 ## 保持更新
 
 Skill 內含版本標記(`VERSION`)與更新檢查腳本(`scripts/check_update.py`),
@@ -60,8 +81,14 @@ python scripts/check_update.py --apply   # git 安裝:就地 pull --ff-only
 ```
 
 `--apply` 只在 skill 目錄是 git repo 時才會實際更新;用 `npx skills add` 安裝的複製式安裝
-會印出 `npx skills update` 讓你自己執行。任一情況都**不會**覆寫你的本地修改
-(`--ff-only` 遇到分岔會直接失敗)。
+會印出 `npx skills update` 讓你自己執行。
+
+兩種更新方式對你的資料都是安全的,但理由不同,別搞混:
+
+- **git 安裝**:`pull --ff-only` 不碰未追蹤檔案,遇到分岔會直接失敗,
+  所以你對 skill 檔案本身的本地修改也不會被覆寫。
+- **複製式安裝**:更新等於「整個 skill 目錄砍掉重鋪」,**你對 skill 檔案的任何本地修改都會不見**。
+  你的憑證與工作區之所以安全,是因為它們根本不在 skill 目錄裡(見上一節),不是因為更新流程保護了它們。
 
 > 維護者注意:改動 Skill 內容後要同步 bump `VERSION` 並在 `CHANGELOG.md` 補一節,
 > 否則使用者端不會收到更新提示。
