@@ -38,6 +38,24 @@ seed 回 4xx 仍是 hard fail——那是真的沒宣告或不可引用(平台�
 註:`/refs/seed-tables` 不能拿來當可引用表白名單——實測 `sale_order_lines`、
 `delivery_carriers`、`product_templates` 等表不在該清單內,但 proxy 與 seed 都正常。
 
+### seed 週期的護欄(審查後補)
+
+- **before 快照不可信時不准刪。** seed 前的 list 若回非 200(`http_call` 對非 2xx
+  不拋錯,5xx/429 會安靜地走過去),id 差集就等於整張表,原本會把**既有沙箱資料全刪光**。
+  改為另存 `before_ok` 旗標,拿不到可信快照就記 WARN 並保留 seed 出來的那列。
+- **沒有 id 的列不算自己的。** 舊寫法 `r.get("id") not in before_ids` 會把不帶 id 的列
+  收進待刪清單,`r["id"]` 隨即 KeyError——整支 e2e 中斷而不是記 fail。
+- 差集判定抽成 `devportal_paths.row_ids/is_row_list/new_rows/updatable_field` 四支純函式
+  (該模組本來就「純函式、不做 I/O,可單元測試」),補 6 個單元測試。
+- WARN 文案補上「沙箱可能留有 1 列 seed 資料」——`crud_cycle` 的契約是不留髒資料,
+  降級路徑留了就要講。
+
+### `push` 的欄位驗證同款誤報
+
+`available-tables` 有、但 `GET /refs/tables/{t}/columns` 讀不到時,原本靜靜 `continue`
+再印「引用宣告已驗證」——跟上面修的是同一種誤報,只是低一層。改為分流文案:
+表名已驗、欄位未驗的張數與表名都列出來。
+
 ## 0.6.0
 
 補上三處「錯了也不會有錯誤訊息」的缺口:抽錯 app、憑證問題延到 S1 才爆、

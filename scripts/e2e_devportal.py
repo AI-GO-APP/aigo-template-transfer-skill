@@ -231,14 +231,17 @@ def main() -> None:
         合法樣本列,免去「照欄位型別自己組樣本」這一步。週期為
         seed(代 insert)→ list → query → update → delete,涵蓋面與 crud_cycle 相同。
         表不存在時 seed 回 4xx,鑑別力與原本的 columns 查詢一致。
-        只刪自己 seed 出來的列(以 seed 前後的 id 差集判定),不動既有沙箱資料。
+        只刪自己 seed 出來的列(以 seed 前後的 id 差集判定),不動既有沙箱資料——
+        **這個不變式的前提是 seed 前的 list 拿得到可信快照**,拿不到就不准刪(見下)。
         """
         nonlocal hard_fail
         base = paths.proxy_rows(vid, tname, access_mode)
 
-        status, before = api(env, "GET", base)
-        before_ids = {r.get("id") for r in before if isinstance(r, dict)} \
-            if status == 200 and isinstance(before, list) else set()
+        before_status, before = api(env, "GET", base)
+        # http_call 對非 2xx 不拋錯,所以 5xx/429 會安靜地走到這裡。此時 before_ids 是
+        # 空集合,差集 = 整張表,再往下刪就是刪光既有沙箱資料——故另存旗標,不靠集合大小判斷。
+        before_ok = before_status == 200 and paths.is_row_list(before)
+        before_ids = paths.row_ids(before)
 
         status, resp = api(env, "POST", paths.table_seed(vid, tname, 1))
         if status >= 500:
@@ -270,18 +273,25 @@ def main() -> None:
             return
         steps.append("query")
 
-        mine = [r for r in rows if isinstance(r, dict) and r.get("id") not in before_ids]
+        if not before_ok:
+            # 沒有可信的 before 快照就分不出哪幾列是自己 seed 的,這時候刪 = 刪光整張表。
+            # 寧可把自己那列留在沙箱(並明講),也不動別人的資料。
+            run_phase(report, label, "warn",
+                      "+".join(steps) + f";seed 前的 list 失敗(HTTP {before_status}),"
+                      f"無法辨識自己 seed 的列——update/delete 未驗,"
+                      f"且**沙箱可能留有 1 列 seed 資料**,請自行確認 tables-count")
+            return
+
+        mine = paths.new_rows(before_ids, rows)
         if not mine:
             run_phase(report, label, "warn",
-                      "+".join(steps) + ";seed 未產生可辨識的新列,update/delete 未驗")
+                      "+".join(steps) + ";seed 未產生可辨識的新列(或新列不帶 id),"
+                      "update/delete 未驗;平台若確有寫入,**沙箱可能留有 1 列 seed 資料**")
             return
 
         # update:拿 seed 出來的列回填同一個字串欄(no-op 更新),只為證明 PATCH 這條路通。
-        # 外鍵(*_id)與系統欄不碰——亂改會踩 FK 或被平台拒絕。
         row = mine[0]
-        field = next((k for k, v in row.items()
-                      if isinstance(v, str) and k not in ("id", "created_at", "updated_at")
-                      and not k.endswith("_id")), None)
+        field = paths.updatable_field(row)
         if field:
             status, _ = api(env, "PATCH", paths.proxy_row(vid, tname, row["id"], access_mode),
                             body={field: row[field]})
