@@ -272,6 +272,8 @@ python scripts/devportal.py push --slug <slug>
 
 push 另會前置驗證 `data_references_schema`(`GET /refs/available-tables` /
 `.../columns`):引用了 AI GO 不存在的表或欄位直接擋下,不必等推完檔才被 preflight fail。
+**這兩支端點不是每個部署都有**(權威清單見 `GET /dev-docs/endpoints`);讀不到時
+push 印 WARN 而非放行綠燈——那代表「引用宣告未經驗證」,正確性改由 S8 承擔。
 
 **沒有可編輯版本時**(上一版已送審或已發布),push 會停下並指出該用哪一支:
 
@@ -306,6 +308,9 @@ e2e 的表 CRUD **分兩個面跑**,兩者的端點不同、不可互串(細節�
 
 引用表的樣本列依 `GET /refs/tables/{t}/columns` 的真實欄位型別產生;
 宣告了 AI GO 不存在的表會在此 fail(而非等到上架後 runtime 才被擋)。
+該端點不在此部署時(404)改走 seed 週期——`POST /sandbox/v/{vid}/tables/{t}/seed`
+讓平台自己產樣本列,seed→list→query→update→delete,鑑別力不變(表不存在 seed 回 4xx)。
+seed 回 5xx 是平台端產樣本列出錯,降為唯讀驗證並記 WARN,**寫入路徑未驗要向用戶帶到**。
 
 **送審門檻(平台 2026-07-28 更新)**:每支 enabled action 必須在最後 deploy 後
 於沙箱**成功跑過一次**——執行紀錄由伺服器自動記,前端不可宣稱。e2e 的

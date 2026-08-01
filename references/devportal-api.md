@@ -104,6 +104,16 @@ data_references_schema, author, version`
 `data_references_schema`(表不存在直接擋下,不必等推完檔才被 preflight fail);
 e2e 也用 `columns` 產引用表的樣本列。
 
+> **`available-tables` 與 `columns` 不是每個部署都有**(2026-08-01 實測
+> developer.ai-go.app:`GET /dev-docs/endpoints` 底下 `/refs/*` 只有
+> `seed-tables` 與 `tags`)。**打之前先看 `/dev-docs/endpoints` 這份權威清單**,
+> 別假設它們一定在。兩支都 404 時:push 印 WARN 但不擋(宣告正確性未驗),
+> e2e 改走 `POST /sandbox/v/{vid}/tables/{t}/seed` 讓平台自己產樣本列。
+>
+> `/refs/seed-tables` **不能**拿來當可引用表的白名單——實測 `sale_order_lines`、
+> `delivery_carriers`、`product_templates`、`product_products`、`stock_pickings`
+> 都不在該清單的 30 張裡,但 proxy 與 seed 都正常。拿它擋會製造假失敗。
+
 ## 架上模板(`/live-templates`)
 
 - `GET /live-templates` → **`{templates: [...], source}`**(不是裸陣列)。每支帶

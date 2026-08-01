@@ -133,5 +133,40 @@ class TestSampleRows(unittest.TestCase):
         self.assertEqual(paths.sample_for_columns(None), {})
 
 
+class TestSeededRowIdentification(unittest.TestCase):
+    """seed 週期靠這組判定「哪幾列是自己 seed 的」;錯了就會刪到既有沙箱資料。"""
+
+    def test_new_rows_is_the_id_difference(self):
+        before = [{"id": "a"}, {"id": "b"}]
+        after = before + [{"id": "c", "name": "seeded"}]
+        mine = paths.new_rows(paths.row_ids(before), after)
+        self.assertEqual([r["id"] for r in mine], ["c"])
+
+    def test_rows_without_id_are_never_mine(self):
+        """組不出 proxy_row 路徑的列不能收進來——舊版收了,delete 時 KeyError 炸掉整支 e2e。"""
+        mine = paths.new_rows(set(), [{"name": "no id here"}, {"id": None}, {"id": "x"}])
+        self.assertEqual([r["id"] for r in mine], ["x"])
+
+    def test_failed_before_snapshot_is_distinguishable_from_empty_table(self):
+        """兩者的 row_ids 都是空集合,故呼叫端必須另外看 is_row_list——這是不刪光整表的唯一防線。"""
+        self.assertEqual(paths.row_ids({"detail": "HTTP 500"}), set())
+        self.assertEqual(paths.row_ids([]), set())
+        self.assertFalse(paths.is_row_list({"detail": "HTTP 500"}))
+        self.assertTrue(paths.is_row_list([]))
+
+    def test_new_rows_tolerates_junk_after(self):
+        self.assertEqual(paths.new_rows(set(), None), [])
+        self.assertEqual(paths.new_rows(set(), [{"id": "a"}, "junk", 3]), [{"id": "a"}])
+
+    def test_updatable_field_skips_foreign_keys_and_system_columns(self):
+        row = {"id": "r1", "created_at": "2026-01-01", "partner_id": "p1",
+               "qty": 3, "note": "hello"}
+        self.assertEqual(paths.updatable_field(row), "note")
+
+    def test_updatable_field_none_when_no_plain_string_column(self):
+        self.assertIsNone(paths.updatable_field({"id": "r1", "qty": 3, "owner_id": "o1"}))
+        self.assertIsNone(paths.updatable_field(None))
+
+
 if __name__ == "__main__":
     unittest.main()

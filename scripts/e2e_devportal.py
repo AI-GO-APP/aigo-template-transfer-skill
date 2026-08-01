@@ -201,11 +201,134 @@ def main() -> None:
             lambda rid: paths.data_record(vid, rid, access_mode),
         )
 
+    def refs_readonly(label: str, tname: str, why: str) -> None:
+        """引用表的唯讀驗證:只證明「這張表在平台解析得到」(list + query)。
+
+        涵蓋面小於完整週期(沒驗寫入路徑),故一律記 WARN 並把降級原因寫進報告——
+        向用戶摘報時要帶到,不能當成完整可用性驗證。
+        list/query 也失敗才是真的宣告有問題。
+        """
+        nonlocal hard_fail
+        status, _ = api(env, "GET", paths.proxy_rows(vid, tname, access_mode))
+        if status != 200:
+            run_phase(report, label, "fail",
+                      f"{why};list 亦失敗(HTTP {status})——這張表確實有問題")
+            hard_fail = True
+            return
+        status, _ = api(env, "POST", paths.proxy_query(vid, tname, access_mode),
+                        body={"filters": {}})
+        if status != 200:
+            run_phase(report, label, "fail", f"{why};query 失敗(HTTP {status})")
+            hard_fail = True
+            return
+        run_phase(report, label, "warn",
+                  f"{why};已以 list+query 確認表可解析,**寫入路徑未驗**")
+
+    def seeded_cycle(label: str, tname: str) -> None:
+        """`GET /refs/tables/{t}/columns` 不存在(404)時的引用表週期。
+
+        平台自己知道引用表的 schema:`POST /sandbox/v/{vid}/tables/{t}/seed` 會產生
+        合法樣本列,免去「照欄位型別自己組樣本」這一步。週期為
+        seed(代 insert)→ list → query → update → delete,涵蓋面與 crud_cycle 相同。
+        表不存在時 seed 回 4xx,鑑別力與原本的 columns 查詢一致。
+        只刪自己 seed 出來的列(以 seed 前後的 id 差集判定)——**這個不變式的前提是
+        seed 前的 list 拿得到可信快照**,拿不到就不准刪(見下)。
+
+        ⚠️ 差集不等於「這張表的沙箱資料沒被動過」:平台的 seed 預設 `replace=True`
+        (`ctx_core.sandbox.seed` → `_replace_all`),**呼叫的當下該表在這一版的既有列
+        就已經被清光了**。差集只保證我們不會再多刪別的,救不回 seed 自己清掉的。
+        跑過 S8 的引用表 = 該表沙箱資料被重種,要向用戶講明白。
+        """
+        nonlocal hard_fail
+        base = paths.proxy_rows(vid, tname, access_mode)
+
+        before_status, before = api(env, "GET", base)
+        # http_call 對非 2xx 不拋錯,所以 5xx/429 會安靜地走到這裡。此時 before_ids 是
+        # 空集合,差集 = 整張表,再往下刪就是刪光既有沙箱資料——故另存旗標,不靠集合大小判斷。
+        before_ok = before_status == 200 and paths.is_row_list(before)
+        before_ids = paths.row_ids(before)
+
+        status, resp = api(env, "POST", paths.table_seed(vid, tname, 1))
+        if status >= 500:
+            # 平台自己產樣本列時炸了(實測 hr_employees / hr_payroll_runs 回 500,
+            # 但同一張表的 proxy list/query 都是 200)——那是平台端問題,
+            # 判成模板宣告錯誤會冤枉模板,降級為唯讀驗證並記 WARN。
+            refs_readonly(label, tname, f"seed HTTP {status}(平台端錯誤,非宣告問題)")
+            return
+        if status != 200:
+            run_phase(report, label, "fail",
+                      f"seed HTTP {status}——平台無此引用表或不可引用,"
+                      f"data_references_schema 宣告錯誤,租戶安裝會被靜默略過:{str(resp)[:160]}")
+            hard_fail = True
+            return
+        steps = ["seed"]
+
+        status, rows = api(env, "GET", base)
+        if status != 200 or not isinstance(rows, list):
+            run_phase(report, label, "fail", f"list HTTP {status}")
+            hard_fail = True
+            return
+        steps.append("list")
+
+        status, _ = api(env, "POST", paths.proxy_query(vid, tname, access_mode),
+                        body={"filters": {}})
+        if status != 200:
+            run_phase(report, label, "fail", f"query HTTP {status}")
+            hard_fail = True
+            return
+        steps.append("query")
+
+        if not before_ok:
+            # 沒有可信的 before 快照就分不出哪幾列是自己 seed 的,這時候刪 = 刪光整張表。
+            # 寧可把自己那列留在沙箱(並明講),也不動別人的資料。
+            run_phase(report, label, "warn",
+                      "+".join(steps) + f";seed 前的 list 失敗(HTTP {before_status}),"
+                      f"無法辨識自己 seed 的列——update/delete 未驗,"
+                      f"且**沙箱可能留有 1 列 seed 資料**,請自行確認 tables-count")
+            return
+
+        mine = paths.new_rows(before_ids, rows)
+        if not mine:
+            run_phase(report, label, "warn",
+                      "+".join(steps) + ";seed 未產生可辨識的新列(或新列不帶 id),"
+                      "update/delete 未驗;平台若確有寫入,**沙箱可能留有 1 列 seed 資料**")
+            return
+
+        # update:拿 seed 出來的列回填同一個字串欄(no-op 更新),只為證明 PATCH 這條路通。
+        row = mine[0]
+        field = paths.updatable_field(row)
+        if field:
+            status, _ = api(env, "PATCH", paths.proxy_row(vid, tname, row["id"], access_mode),
+                            body={field: row[field]})
+            if status not in (200, 204):
+                run_phase(report, label, "fail", f"update HTTP {status}")
+                hard_fail = True
+                return
+            steps.append("update")
+
+        undeleted = []
+        for r in mine:
+            status, _ = api(env, "DELETE", paths.proxy_row(vid, tname, r["id"], access_mode))
+            if status not in (200, 204):
+                undeleted.append(r["id"])
+        if undeleted:
+            run_phase(report, label, "fail",
+                      f"delete 失敗 {len(undeleted)} 列(沙箱留有測試資料):{undeleted[:3]}")
+            hard_fail = True
+            return
+        steps.append("delete")
+        run_phase(report, label, "pass",
+                  "+".join(steps) + "(seed 代 insert:平台無 /refs/tables/{t}/columns)")
+
     # 3b: 引用表。樣本列依 AI GO 真實欄位型別產生(GET /refs/tables/{t}/columns),
     # 順帶驗證宣告的表在平台真的存在——preflight 對此只給 fail 訊息,這裡提前抓。
+    # 該端點不存在的部署改走 seeded_cycle,不把平台差異算成模板宣告錯誤。
     for ref in paths.declared_refs(meta):
         tname = ref["table_name"]
         status, cols = api(env, "GET", f"/refs/tables/{tname}/columns")
+        if status == 404:
+            seeded_cycle(f"crud:引用表 {tname}", tname)
+            continue
         if status != 200:
             run_phase(report, f"crud:引用表 {tname}", "fail",
                       f"AI GO 無此表或不可引用(HTTP {status})——"

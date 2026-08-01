@@ -153,3 +153,50 @@ def sample_for_columns(columns: Any) -> dict:
             continue
         row[c["name"]] = _SQL_SAMPLE.get(ctype, "e2e")
     return row
+
+
+# ── seed 週期的列辨識 ──────────────────────────────────────────
+# e2e 用 seed 代 insert 時,「哪幾列是自己 seed 出來的」全靠 seed 前後的 id 差集。
+# 這組判定錯了就會刪到既有沙箱資料,故抽成純函式獨立測。
+
+def row_ids(rows: Any) -> set:
+    """list 回應裡的 id 集合。非 list(端點失敗、回錯形狀)一律回空集合。
+
+    **呼叫端不可拿「回空集合」當成「表是空的」**——兩者在這裡分不出來,
+    要靠 `is_row_list()` 先確認回應本身可信,見 `new_rows` 的 docstring。
+    """
+    if not isinstance(rows, list):
+        return set()
+    return {r["id"] for r in rows if isinstance(r, dict) and r.get("id") is not None}
+
+
+def is_row_list(rows: Any) -> bool:
+    """這份回應能不能當成可信的列快照。"""
+    return isinstance(rows, list)
+
+
+def new_rows(before_ids: set, after: Any) -> list[dict]:
+    """seed 之後多出來的列(帶得出 id 的才算)。
+
+    沒有 id 的列一律排除:組不出 `proxy_row` 路徑就談不上 update/delete,
+    早期版本用 `r.get("id") not in before_ids` 收進來,後面 `r["id"]` 直接 KeyError。
+
+    **before 快照不可信時不准呼叫這支**——`before_ids` 會是空集合,
+    差集就等於整張表,呼叫端接著刪 = 刪光既有沙箱資料。
+    """
+    if not isinstance(after, list):
+        return []
+    return [r for r in after if isinstance(r, dict)
+            and r.get("id") is not None and r["id"] not in before_ids]
+
+
+def updatable_field(row: dict) -> str | None:
+    """挑一個可以 no-op 回填的字串欄,用來證明 PATCH 這條路通。
+
+    外鍵(`*_id`)與系統欄不碰——亂改會踩 FK 或被平台拒絕。
+    """
+    if not isinstance(row, dict):
+        return None
+    return next((k for k, v in row.items()
+                 if isinstance(v, str) and k not in ("id", "created_at", "updated_at")
+                 and not k.endswith("_id")), None)
