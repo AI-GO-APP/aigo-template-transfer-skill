@@ -231,8 +231,13 @@ def main() -> None:
         合法樣本列,免去「照欄位型別自己組樣本」這一步。週期為
         seed(代 insert)→ list → query → update → delete,涵蓋面與 crud_cycle 相同。
         表不存在時 seed 回 4xx,鑑別力與原本的 columns 查詢一致。
-        只刪自己 seed 出來的列(以 seed 前後的 id 差集判定),不動既有沙箱資料——
-        **這個不變式的前提是 seed 前的 list 拿得到可信快照**,拿不到就不准刪(見下)。
+        只刪自己 seed 出來的列(以 seed 前後的 id 差集判定)——**這個不變式的前提是
+        seed 前的 list 拿得到可信快照**,拿不到就不准刪(見下)。
+
+        ⚠️ 差集不等於「這張表的沙箱資料沒被動過」:平台的 seed 預設 `replace=True`
+        (`ctx_core.sandbox.seed` → `_replace_all`),**呼叫的當下該表在這一版的既有列
+        就已經被清光了**。差集只保證我們不會再多刪別的,救不回 seed 自己清掉的。
+        跑過 S8 的引用表 = 該表沙箱資料被重種,要向用戶講明白。
         """
         nonlocal hard_fail
         base = paths.proxy_rows(vid, tname, access_mode)
