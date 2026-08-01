@@ -10,8 +10,8 @@
 |---|---|---|
 | 401 | 認證失效 | PAT 已撤銷/過期 → 重新發行 + `set-pat`;AIGO token → 快取自動換發,仍失敗檢查 `~/.aigo-transfer/.env` 帳密(必要時刪 `~/.aigo-transfer/token.json` 重登) |
 | 403 | 權限不足 | 分兩種:Developer 端 `read_only`(請 admin 升 editor)/ AI GO 端缺 `builder.access`(請租戶管理員開通)。**不重試、不繞路** |
-| 409 | 衝突或配額 | slug 撞架上模板或他人模組 → 換 slug 重新 init;版本線衝突 → 已有進行中版本,不要 POST /versions |
-| 422 | 輸入不合法 | 讀 detail:metadata 欄位(tags 白名單、category、custom_objects_schema 被擋)或 preflight issues |
+| 409 | 衝突或配額 | slug 撞架上模板或他人模組 → 換 slug 重新 init;版本線衝突 → 已有進行中版本,不要 POST /versions;自建表寫入 `unique_violation` → 該欄宣告了 unique,值重複(**這是預期行為**,見下表) |
+| 422 | 輸入不合法 | 讀 detail:metadata 欄位(tags 白名單、category、custom_objects_schema 被擋)或 preflight issues;自建表寫入 `invalid_field`/`not_null_violation` → 送出的欄位鍵與宣告對不上 |
 | 400 | 業務規則拒絕 | 讀 detail 照改,不要瞎猜 |
 | 503 | 服務未配置 | 沙箱 action → 平台 `RUNNER_URL` 未設,記 SKIP 並向用戶標注;不是你的 code 問題 |
 
@@ -44,6 +44,9 @@
 | S8 引用表**全部** fail | 平台部署沒有 `/refs/tables/{t}/columns`(非模板宣告有誤) | 0.6.1 起自動改走 seed 週期;仍全 fail 才是宣告問題。先自行打 `GET /sandbox/v/{vid}/proxy/{vid}/{table}` 確認:200 = 表沒問題 |
 | S8 引用表 WARN「seed 前的 list 失敗」 | 該表的 proxy list 回非 200,無法辨識自己 seed 的列 | 護欄擋住「刪光整張表」而已,不是模板問題。沙箱可能留有 1 列 seed 資料,跑 `tables-count` 確認並自行清 |
 | S8 引用表 WARN「seed HTTP 5xx」 | 平台產樣本列時出錯(實測 `hr_employees`、`hr_payroll_runs`) | 非模板問題:該表已用 list+query 確認可解析,但**寫入路徑未驗**。摘報時要帶到。根因已查明並送修:種子資料的固定 id 跨版本相同、撞沙箱主鍵(urfit-tech/aigo-developer-platfom#63) |
+| S8 自建表寫入 422「未宣告的欄位:['報單號', …]」但宣告明明是對的 | 送出的鍵是**顯示名**不是實體名——模板用 `f.physical_name \|\| f.display_name` 之類的執行期反查取欄位鍵,在該面取到 undefined 而退回顯示名。訊息指向 schema 宣告,但宣告完全正確,所以很難連起來 | 刪掉反查:新制的表/欄 key 就是實體名,靜態就知道(見 template-contract.md「自建表:實體名與唯一鍵」)。共用碼真的要讀 list_tables 就寫 `f.physical_name ?? f.key`——兩面鍵名不同 |
+| S8 自建表寫入 409 `unique_violation` | 該欄宣告了 `"unique": true`,值與既有列重複 | **預期行為**,不是平台問題。正式環境是真 SQL UNIQUE(NULL 不佔用唯一性,但空字串 `''` 算一般值,兩列 `''` 照樣違反)。測試資料換一個值即可 |
+| 引用表的布林欄在沙箱是 `true/false`、正式環境卻是 `"yes"/"no"` | 沙箱 fixture 是平台維護的近似值,曾與正式環境不一致(已知:`hr_leave_types.requires_allocation`) | 值型別一律以正式環境為準:`GET /proxy/{app_id}/{table}` 實讀一筆,或查 `ai-go/backend/app/models/`(該租戶無資料時仍有答案)。**不要**照沙箱的值改 app 的判斷式——那會在上線後恆為 false |
 | 跑完 S8 發現沙箱引用表資料變了 | 平台 seed 預設 `replace=True`,呼叫當下就清光該表這一版的既有列 | **預期行為,不是 bug**。跑 S8 前若沙箱有要留的手動測試資料,先自行備份;或改用 `POST .../tables/{t}/rows` 重貼 |
 | S8 action 全部 503 | runner 未配置 | 平台側設定;e2e 記 SKIP,送審前向用戶明確標注此風險 |
 | S8 approval_status: pending | 租戶簽核流程攔截 | **非失敗、不可重試**(重試 = 重複建單);記 WARN 即可 |

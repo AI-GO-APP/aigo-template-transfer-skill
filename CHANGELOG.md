@@ -4,6 +4,45 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.6.3
+
+補上自建表的三條契約細節。三條都是實際轉換時踩到、且**症狀與成因對不起來**的類型:
+錯誤訊息指向的地方是對的,真正的成因在別處。
+
+### 欄位的 key 就是實體名——執行期反查一律刪掉
+
+`template-contract.md` 原本只寫了「表名對照 helper 必須刪除」,漏了欄位那一半。安裝時
+AI GO 直接拿宣告的 key 當實體名(`template_install.py`:表 `physical_name=table.key`、
+欄 `physical_name=f.key`),換租戶也不變。從 `custom_objects` 時代帶過來的
+`f.physical_name || f.display_name` 反查因此是多餘的,而且會把自己綁在 `list_tables`
+的回應形狀上。
+
+失敗長相:寫入被擋成「未宣告的欄位:['報單號', …]」,但 schema 宣告完全正確——送出的
+是顯示名,因為反查取到 undefined 退回了顯示名。
+
+### `list_tables` 兩面的實體名鍵不同名
+
+`GET /data-center/tables` 回 `physical_name`(沒有 `key`),`ctx.db.list_tables()` 回
+`key`(沒有 `physical_name`)。這是 AI GO 兩個各自穩定的契約,不是筆誤。共用碼要兩邊都
+跑就自己收斂:`f.physical_name ?? f.key`。
+
+### unique 是真的 SQL UNIQUE,違反是 409
+
+欄位級 `CONSTRAINT ... UNIQUE`,不是應用層檢查也不是 partial index:NULL 不佔用唯一性,
+但空字串 `''` 是一般值、兩列 `''` 照樣違反;違反回 409 `unique_violation`(422 是輸入
+不合法類,兩者不同碼)。
+
+### 引用表的值型別以正式環境為準,不可從沙箱 fixture 反推
+
+沙箱 fixture 是平台維護的近似值,與正式環境有過不一致的前例
+(`hr_leave_types.requires_allocation` 正式是 `"yes"`/`"no"` 字串,沙箱曾給 bool)。
+兩個方向都很安靜:照正式環境寫在沙箱測不到該分支,照沙箱寫則上線後恆 false。
+查法:`GET /proxy/{app_id}/{table}` 實讀一筆,或查 `ai-go/backend/app/models/`
+(該租戶剛好無資料時仍有答案)。
+
+平台側對應的修正:urfit-tech/aigo-developer-platfom#73(fixture 型別)、
+#75(沙箱補驗 unique)、#76(沙箱兩面各自對齊實體名鍵)。
+
 ## 0.6.2
 
 修正「更新或重裝 skill 會清掉用戶憑證與轉換進度」的資料遺失問題。
