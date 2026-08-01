@@ -310,7 +310,8 @@ python scripts/e2e_devportal.py --slug <slug> --quick      # 快速檔(迭代中
 e2e 的表 CRUD **分兩個面跑**,兩者的端點不同、不可互串(細節見
 `references/devportal-api.md`「資料面有兩組」):
 
-- `data_center_schema` 宣告的**自建表** → `/data/objects/{key}/records`
+- `data_center_schema` 宣告的**自建表** → `/data-center/tables/{key}/records`
+  (舊的 `/data/objects/` 面已隨 AI GO 退場,平台回 404;update/delete 要帶表名)
 - `data_references_schema` 宣告的**引用表** → `/proxy/...`(平台會驗 AI GO 快照)
 
 引用表的樣本列依 `GET /refs/tables/{t}/columns` 的真實欄位型別產生;

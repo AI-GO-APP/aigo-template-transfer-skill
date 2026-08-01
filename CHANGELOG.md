@@ -4,6 +4,43 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.6.4
+
+修正「任何帶自建表的模板,S8 必然 hard_fail」——e2e 打的是已退場的端點面。
+
+### 成因:自建表那一面的路徑在平台端整組換掉了
+
+不是 0.3.4 那種「餵錯面」(把自建表名餵給 `/proxy`),這次是**這一面本身被替換**。
+ai-go-developer `backend/app/api/sandbox.py` 的 `_data_center_router` 檔頭寫明:
+舊的 `/data/objects/{slug}/records` 已隨 AI GO 退場,「留著只會讓用舊面的模組在沙箱
+測得過、上架後打不到」。現行契約:
+
+    GET|POST    /sandbox/v/{vid}/data-center/tables/{table}/records
+    PATCH|DEL   /sandbox/v/{vid}/data-center/tables/{table}/records/{row_id}
+    GET         /sandbox/v/{vid}/data-center/tables
+
+且 update/delete **要帶表名**——舊面是以 record id 全域反查,這是簽章層的差異,
+不只是路徑字串換掉。external 走 `ext/data-center` 前綴。
+
+前三批模板剛好都零自建表,所以這條路徑到現在才第一次被踩到;症狀是
+`[FAIL] crud:自建表 tbl:insert HTTP 404:{'detail': 'Not Found'}`,而
+`GET /data-center/tables` 回 200 且列得出該表——宣告是對的,面是錯的。
+
+### 修正
+
+- `devportal_paths`:新增 `_dc_prefix()` 統一 internal / external 前綴;
+  `data_records()` 改走新面;`data_record()` 簽章加 `object_key`;
+  新增 `data_tables()`(列出自建表結構,宣告了但還沒資料的表也會列)
+- `e2e_devportal` 呼叫端跟著帶 `tkey`(預設引數綁定,避免 late binding)
+- `references/devportal-api.md`、`SKILL.md`、各處檔頭註解一併改掉舊面
+  ——文件留著舊路徑,等於繼續教人寫上架後打不到的碼
+- 回歸護欄 `test_retired_object_surface_is_gone`:任何自建表路徑都不該再出現
+  `/data/objects/` 或 `/data/records/`
+
+平台是單一部署(`DEVPORTAL_DEFAULT_API` → developer.ai-go.app),舊面在平台端
+已無對應 route,故直接切換、不做兩面偵測。與 0.6.1 的 `/refs` 降級不同:那支是
+端點被刻意移除且無替代品才要降級,這支有明確的替代面。
+
 ## 0.6.3
 
 補上自建表的三條契約細節。三條都是實際轉換時踩到、且**症狀與成因對不起來**的類型:

@@ -15,8 +15,8 @@
 `/proxy` 與 `/tables/{t}/seed|rows` 這一面在平台端有 `assert_table` 硬驗 AI GO
 快照(ai-go-developer `ctx_core/sandbox.py`),自建表名打過去一律回 404
 「AI GO 無此表」。0.3.4 以前的 e2e 正是把 `data_center_schema` 的表名餵給
-`/proxy`,任何帶自建表的模板 S8 必然 hard_fail,而真正該測的
-`/data/objects/` 從沒被呼叫過。
+`/proxy`,任何帶自建表的模板 S8 必然 hard_fail,而真正該測的自建表那一面
+從沒被呼叫過。
 
 external 模板走 `ext/` 前綴且不帶 app_id,故所有組裝都吃 access_mode。
 本模組**純函式、不做 I/O**,可單元測試。

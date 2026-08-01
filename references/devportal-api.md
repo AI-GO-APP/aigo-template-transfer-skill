@@ -64,18 +64,24 @@ data_references_schema, author, version`
 
 | metadata 宣告 | 語意 | 沙箱端點 | 前端 SDK |
 |---|---|---|---|
-| `data_center_schema.tables[]` | 模板**自建**表 | `/data/objects/{key}/records` | data_table |
+| `data_center_schema.tables[]` | 模板**自建**表 | `/data-center/tables/{key}/records` | data_table |
 | `data_references_schema[]` | 引用 **AI GO 既有**表 | `/proxy/{app_id}/{table}` | proxy |
 
 `/proxy` 與 `/tables/{t}/seed\|rows` 這一面在平台端有 `assert_table` 硬驗 AI GO 快照
 (`ctx_core/sandbox.py`),自建表名打過去回 404「AI GO 無此表」;反之引用表打
-`/data/objects` 則是進到「未知 slug = 空集合」的自建表語意,測不到真東西。
+`/data-center/tables` 則是進到「未宣告的表 = 空頁」的自建表語意,測不到真東西。
 腳本一律經 `scripts/devportal_paths.py` 組路徑,不要手拼。
+
+**自建表那一面的路徑換過**:舊的 `/data/objects/{slug}/records`(update/delete 走
+`/data/records/{id}`、以 record id 全域反查)**已隨 AI GO 退場**,平台端不再提供,
+見 ai-go-developer `backend/app/api/sandbox.py` 的 `_data_center_router` 檔頭。
+現行面以 **(表, id)** 定位,update/delete **要帶表名**——不只是路徑字串換掉,是簽章層的差異。
 
 | Method / Path | 說明 |
 |---|---|
-| `GET/POST /sandbox/v/{vid}/data/objects/{key}/records` | **自建表** CRUD;`ext/data/...` 為 external 變體 |
-| `PATCH/DELETE /sandbox/v/{vid}/data/records/{record_id}` | 同上;路徑不帶表名,平台以 record id 反查 |
+| `GET/POST /sandbox/v/{vid}/data-center/tables/{key}/records` | **自建表** CRUD;`ext/data-center/...` 為 external 變體 |
+| `PATCH/DELETE /sandbox/v/{vid}/data-center/tables/{key}/records/{row_id}` | 同上;路徑**帶表名** |
+| `GET /sandbox/v/{vid}/data-center/tables` | 列出自建表結構;宣告了但還沒資料的表也會列 |
 | `GET/POST /sandbox/v/{vid}/proxy/{app_id}/{table}` | **引用表** CRUD(internal);沙箱以 vid 充當 app_id |
 | `GET/POST /sandbox/v/{vid}/ext/proxy/{table}` | 引用表 CRUD(external,不帶 app_id) |
 | `POST /sandbox/v/{vid}[/ext]/proxy/{table}/query` | 引用表查詢 |
