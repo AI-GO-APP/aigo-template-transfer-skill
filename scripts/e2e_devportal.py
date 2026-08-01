@@ -198,7 +198,7 @@ def main() -> None:
             f"crud:自建表 {tkey}",
             paths.data_records(vid, tkey, access_mode),
             {"data": paths.sample_for_fields(table.get("fields"))},
-            lambda rid: paths.data_record(vid, rid, access_mode),
+            lambda rid, _k=tkey: paths.data_record(vid, _k, rid, access_mode),
         )
 
     def refs_readonly(label: str, tname: str, why: str) -> None:

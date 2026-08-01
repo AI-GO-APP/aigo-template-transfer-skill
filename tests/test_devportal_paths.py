@@ -60,7 +60,7 @@ class TestSurfaceSeparation(unittest.TestCase):
         key = paths.declared_tables(META_SELF)[0]["key"]
         for access_mode in ("internal", "external"):
             path = paths.data_records(VID, key, access_mode)
-            self.assertIn("/data/objects/", path)
+            self.assertIn("/data-center/tables/", path)
             self.assertNotIn("/proxy", path)
 
     def test_referenced_table_uses_proxy(self):
@@ -76,14 +76,29 @@ class TestSurfaceSeparation(unittest.TestCase):
 
     def test_data_paths_switch_on_access_mode(self):
         self.assertEqual(paths.data_records(VID, "o", "internal"),
-                         f"/sandbox/v/{VID}/data/objects/o/records")
+                         f"/sandbox/v/{VID}/data-center/tables/o/records")
         self.assertEqual(paths.data_records(VID, "o", "external"),
-                         f"/sandbox/v/{VID}/ext/data/objects/o/records")
+                         f"/sandbox/v/{VID}/ext/data-center/tables/o/records")
 
-    def test_record_path_has_no_table_name(self):
-        """平台 update/delete 以 record id 反查,路徑不帶表名。"""
-        path = paths.data_record(VID, "r-1", "internal")
-        self.assertEqual(path, f"/sandbox/v/{VID}/data/records/r-1")
+    def test_record_path_carries_table_name(self):
+        """新的資料中心面以 (表, id) 定位,路徑帶表名。
+
+        舊面 `/data/records/{id}` 是全域反查,已隨 AI GO 退場;平台現在回 404,
+        沿用舊面會讓任何帶自建表的模板在 S8 必然 hard_fail。
+        """
+        path = paths.data_record(VID, "o", "r-1", "internal")
+        self.assertEqual(path, f"/sandbox/v/{VID}/data-center/tables/o/records/r-1")
+        self.assertEqual(paths.data_record(VID, "o", "r-1", "external"),
+                         f"/sandbox/v/{VID}/ext/data-center/tables/o/records/r-1")
+
+    def test_retired_object_surface_is_gone(self):
+        """回歸護欄:任何自建表路徑都不該再出現舊的 /data/objects/ 或 /data/records/。"""
+        for access_mode in ("internal", "external"):
+            for path in (paths.data_tables(VID, access_mode),
+                         paths.data_records(VID, "o", access_mode),
+                         paths.data_record(VID, "o", "r-1", access_mode)):
+                self.assertNotIn("/data/objects/", path)
+                self.assertNotIn("/data/records/", path)
 
     def test_missing_access_mode_defaults_to_internal(self):
         self.assertEqual(paths.proxy_rows(VID, "t", None), paths.proxy_rows(VID, "t", "internal"))
