@@ -36,6 +36,28 @@ SOURCE_DECISION_KEY = "source_app"
 
 _URL_RE = re.compile(r"https?://([A-Za-z0-9.\-]+)")
 _EGRESS_SLUG_RE = re.compile(r"ctx\.http\.(?:call|fetch)\s*\(\s*['\"]([^'\"\n]+)['\"]")
+# slug 放在模組級常數裡:`OPENAI_EGRESS = "openai"` → `ctx.http.call(OPENAI_EGRESS, ...)`。
+# 只認字面值直接漏掉這種寫法,而漏掉的後果是 required_egress 少宣告 →
+# 租戶安裝時不會被提示授權該服務 → 裝完 action 一律連不出去。
+# 0.7.0 把 ctx.http.call 定為對外呼叫的唯一正解之後,這種寫法只會更多。
+_EGRESS_SLUG_VAR_RE = re.compile(r"ctx\.http\.(?:call|fetch)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,")
+_STR_CONST_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*['\"]([^'\"\n]+)['\"]\s*$",
+                           re.MULTILINE)
+
+
+def _egress_slugs(text: str) -> set[str]:
+    """撈出這份原始碼宣告的 egress slug,字面值與模組級字串常數都算。
+
+    只解析同一個檔案裡的常數——跨檔 import 的常數不追(要追就得做真的
+    符號解析,而漏報在這裡比誤報安全:誤報會讓模板宣告一個不存在的服務,
+    租戶安裝時被要求授權一個根本用不到的東西)。
+    """
+    slugs = set(_EGRESS_SLUG_RE.findall(text))
+    consts = dict(_STR_CONST_RE.findall(text))
+    for name in _EGRESS_SLUG_VAR_RE.findall(text):
+        if name in consts:
+            slugs.add(consts[name])
+    return slugs
 _LEGACY_API_RE = re.compile(
     r"ctx\.db\.(?:query_object|insert_object|update_object|remove_object|list_custom_objects)"
     r"|\b(?:submitRecord|listRecords|updateRecord|deleteRecord)\s*\(")
@@ -216,7 +238,7 @@ def build_inventory(template: Path, env: dict, app_id: str | None) -> dict:
             text = py.read_text(encoding="utf-8", errors="replace")
             domains |= {d for d in _URL_RE.findall(text)
                         if d not in ("localhost", "127.0.0.1")}
-            slugs |= set(_EGRESS_SLUG_RE.findall(text))
+            slugs |= _egress_slugs(text)
             for m in _LEGACY_API_RE.finditer(text):
                 inventory["legacy_usage"].append(
                     f"{py.relative_to(template).as_posix()}: {m.group(0)}")
