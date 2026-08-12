@@ -40,6 +40,43 @@ class TestVersionCompare(unittest.TestCase):
         self.assertFalse(cu._is_newer("same", "same"))
 
 
+class TestBomTolerance(unittest.TestCase):
+    """Windows PowerShell 的 `Set-Content -Encoding utf8` / `Out-File` 預設寫 BOM。
+
+    誰用它 bump 一次 VERSION,BOM 就會讓主版號被判成非數字而歸零
+    (`1.0.0` → `(0,0,0)`),於是所有安裝者的自動更新從此靜靜地不再提示。
+    2026-08-12 在模擬安裝者時實際踩到(`"local": "﻿0.6.4"`)。
+    """
+
+    def test_clean_version_strips_bom(self):
+        self.assertEqual(cu._clean_version("﻿0.6.4\n"), "0.6.4")
+        self.assertEqual(cu._clean_version("0.7.0\n"), "0.7.0")
+        self.assertIsNone(cu._clean_version("﻿\n"))
+        self.assertIsNone(cu._clean_version(""))
+
+    def test_bom_does_not_zero_the_major(self):
+        # 修好之前:_parse_version("﻿1.0.0") → (0,0,0),比 0.7.0 還舊
+        self.assertTrue(cu._is_newer(cu._clean_version("﻿1.0.0"), "0.7.0"))
+
+    def test_local_version_file_with_bom(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = Path(tmp)
+            (skill / "VERSION").write_text("1.2.3\n", encoding="utf-8-sig")
+            with mock.patch.object(cu, "SKILL_DIR", skill):
+                self.assertEqual(cu._read_local_version(), "1.2.3")
+
+    def test_remote_version_with_bom(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = Path(tmp)
+            (skill / "VERSION").write_text("0.7.0\n", encoding="utf-8")
+            with mock.patch.object(cu, "SKILL_DIR", skill), \
+                 mock.patch.object(cu, "STATE_FILE", Path(tmp) / "s.json"), \
+                 mock.patch.object(cu, "_fetch", return_value="﻿1.0.0\n"):
+                result = cu.check(force=True)
+        self.assertEqual(result["status"], "outdated")
+        self.assertEqual(result["remote"], "1.0.0")
+
+
 class TestChangelogExcerpt(unittest.TestCase):
     def test_extracts_only_target_section(self):
         with mock.patch.object(cu, "_fetch", return_value=REMOTE_CHANGELOG):
