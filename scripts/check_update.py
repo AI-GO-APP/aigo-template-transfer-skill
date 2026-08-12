@@ -42,13 +42,26 @@ CHANGELOG_MAX_LINES = 20
 APPLY_TIMEOUT = 60
 
 
+def _clean_version(text: str) -> str | None:
+    """取第一行並剝掉 BOM。
+
+    `utf-8-sig` 只處理檔案開頭那顆 BOM,遠端內容與意外插在中間的仍要靠 `lstrip`。
+    為什麼值得做:Windows PowerShell 的 `Set-Content -Encoding utf8` 與 `Out-File`
+    預設**會寫 BOM**,誰用它 bump 一次 VERSION,`_parse_version` 就會把主版號
+    `"﻿1"` 判成非數字而歸零——`1.0.0` 變成 `(0,0,0)`,比 0.7.0 還舊,
+    於是所有安裝者的自動更新從此靜靜地不再提示。沒有錯誤訊息的那種壞法。
+    """
+    text = text.lstrip("﻿").strip()
+    return text.splitlines()[0].strip() if text else None
+
+
 def _read_local_version() -> str | None:
     """讀取本地 VERSION(第一行)。檔案不存在或空白回傳 None。"""
     try:
-        text = (SKILL_DIR / "VERSION").read_text(encoding="utf-8").strip()
+        text = (SKILL_DIR / "VERSION").read_text(encoding="utf-8-sig")
     except OSError:
         return None
-    return text.splitlines()[0].strip() if text else None
+    return _clean_version(text)
 
 
 def _fetch(url: str) -> str | None:
@@ -163,11 +176,13 @@ def check(force: bool = False) -> dict:
     if not force and _throttled(state):
         return {"status": "skipped", "local": local}
 
-    remote = _fetch(REMOTE_VERSION_URL)
-    if not remote:
+    raw = _fetch(REMOTE_VERSION_URL)
+    if not raw:
         # 離線/GitHub 不可用:**不寫 last_check**,下次仍會嘗試
         return {"status": "unknown", "local": local, "reason": "無法取得遠端 VERSION"}
-    remote = remote.strip().splitlines()[0].strip()
+    remote = _clean_version(raw)
+    if not remote:
+        return {"status": "unknown", "local": local, "reason": "遠端 VERSION 是空的"}
 
     _save_state({"last_check": time.time(), "local": local, "remote": remote})
 

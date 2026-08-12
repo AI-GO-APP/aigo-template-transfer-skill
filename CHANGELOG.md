@@ -4,6 +4,34 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.7.1
+
+VERSION 檔帶 BOM 會讓**所有安裝者的自動更新從此靜靜地不再提示**。
+
+2026-08-12 驗證 0.7.0 的更新通道時,用 PowerShell 的 `Set-Content -Encoding utf8`
+造了一份假的舊安裝,`check_update.py --json` 回 `"local": "﻿0.6.4"`——BOM 沒被
+`.strip()` 剝掉(它只處理空白)。`_parse_version` 對非數字段一律歸零,於是
+`"﻿1"` 被判成 `0`:**`1.0.0` 變成 `(0,0,0)`,比 0.7.0 還舊,更新提示永遠不會出現。**
+
+這次是測試腳本自己寫的 BOM(repo 的 VERSION 乾淨,遠端也是),但觸發條件一點都不
+罕見:Windows PowerShell 的 `Set-Content -Encoding utf8` 與 `Out-File` **預設就寫 BOM**,
+誰在 Windows 上 bump 一次 VERSION 就中。而失效方式是靜默的——沒有錯誤訊息,
+只是從此再也不提示更新,連「漏報」都不會被發現。
+
+- 新增 `_clean_version()`:`lstrip("﻿")` + 取第一行,本地讀檔改 `utf-8-sig`,
+  遠端內容也過同一支(BOM 可能來自任何一邊)
+- 遠端 VERSION 剝完是空字串時回 `unknown`,不再讓空值往下走
+- 新增 `TestBomTolerance` 4 例,含「BOM 不得讓主版號歸零」這條斷言本身
+
+### 0.7.0 更新通道實測(git 與 copy 兩條路)
+
+- **git 安裝**:clone 到 44dde9a(0.6.4)→ `check_update.py --force` 正確報
+  `0.6.4 → 0.7.0` 並帶 CHANGELOG 摘要 → `--apply` 跑 `git pull --ff-only` →
+  VERSION 變 0.7.0、新檔到位 → 再檢查回 `current`。exit code 全程 0(SessionStart
+  hook 不可阻斷)
+- **複製式安裝**(無 `.git`):正確判為 `install_method: copy`,**不嘗試 pull**,
+  回 `npx skills update aigo-template-transfer-skill` 交給使用者
+
 ## 0.7.0
 
 同步 Developer 平台 `origin/main`(對到 2026-08-11,24c958a);上次同步是 2026-08-01。
