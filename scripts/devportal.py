@@ -11,7 +11,7 @@
 
     python scripts/devportal.py bump --slug my_template --kind minor  # 已發布模組出下一版
     python scripts/devportal.py withdraw --slug my_template           # 撤回送審才能繼續編輯
-    python scripts/devportal.py events --slug my_template             # 送審門檻現況(伺服器真相)
+    python scripts/devportal.py events --slug my_template             # 佈署/測試覆蓋率(伺服器真相)
     python scripts/devportal.py pull --slug my_template               # 把平台上的檔案取回
     python scripts/devportal.py live-templates [--query x]            # 架上清單(S0 比對重疊)
     python scripts/devportal.py adopt --template-slug x               # 接管架上模板(admin,不可逆)
@@ -32,6 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common
 import devportal_paths as paths
+import normalize_meta
 
 ENV_TEMPLATE = """# 本檔在 skill 目錄外(~/.aigo-transfer/),更新或重裝 skill 不會被清掉,也不進版控。
 DEVPORTAL_API=https://developer.ai-go.app/api/v1
@@ -108,6 +109,10 @@ def collect_files(template: Path) -> list[dict]:
         if not path.is_file():
             continue
         rel = path.relative_to(template).as_posix()
+        # 建置產物一律不推:平台端也會丟(common.is_build_artifact 檔頭有事故說明),
+        # 但那是靜默丟棄——這裡不先濾,寫後回讀的檔數就會對不上而變成假失敗。
+        if common.is_build_artifact(rel):
+            continue
         if path.suffix in common.TEXT_EXT:
             try:
                 files.append({"file_path": rel,
@@ -126,7 +131,15 @@ def build_metadata(meta: dict) -> dict:
     keys = ["name", "description", "long_description", "icon_emoji", "category", "tags",
             "access_mode", "setup_schema", "required_egress", "data_center_schema",
             "data_references_schema", "author", "version"]
-    return {k: meta[k] for k in keys if meta.get(k) is not None and meta.get(k) != ""}
+    # None 與 "" 一律不送:AI GO 的非 Optional 欄位顯式收到 null 就 422
+    # (Pydantic 預設值只在「鍵不存在」時才套用),而缺鍵由平台的 setdefault 兜住。
+    payload = {k: meta[k] for k in keys if meta.get(k) is not None and meta.get(k) != ""}
+    # 容器型別:S6 已驗過,但 pull/adopt 進來的 meta 沒走過 normalize_meta。
+    problems = normalize_meta.aigo_type_problems(payload)
+    if problems:
+        raise SystemExit("[FAIL] metadata 不合 AI GO 型別契約,推上去發布時會 422:\n  "
+                         + "\n  ".join(problems))
+    return payload
 
 
 def find_editable_version(env: dict, module_id: str) -> dict:
@@ -409,7 +422,11 @@ def cmd_withdraw(args) -> None:
 
 
 def cmd_events(args) -> None:
-    """讀版本的佈署/測試事件——送審門檻的唯一真相在伺服器,不在本地報告。"""
+    """讀版本的佈署/測試事件——測試覆蓋率的唯一真相在伺服器,不在本地報告。
+
+    平台 2026-08-04 起送審硬門檻只有「至少一筆 deploy 事件」(assert_deployed);
+    每支 action 的成功紀錄仍然照記,只是不再擋送審,改由本 skill 的 S9 人工閘看。
+    """
     env = common.load_env()
     module_id, version_id = state_ids(common.work_dir(args.slug))
     status, events = api(env, "GET", f"/modules/{module_id}/versions/{version_id}/events")
@@ -428,7 +445,7 @@ def cmd_events(args) -> None:
         elif e.get("kind") == "test":
             tail = "  (預覽型 test)"
         print(f" {fresh} {e.get('created_at')}  {e.get('kind'):<7}{tail}")
-    print("\n(* = 發生在最後一次 deploy 之後,即對送審門檻有效的事件)")
+    print("\n(* = 發生在最後一次 deploy 之後,即仍然有效的驗證紀錄;deploy 會讓先前的全部失效)")
 
     fresh_events = [e for e in events if (e.get("created_at") or "") >= last_deploy]
     passed = {(e.get("detail") or {}).get("action") for e in fresh_events
@@ -436,7 +453,8 @@ def cmd_events(args) -> None:
     passed.discard(None)
     has_preview = any(e.get("kind") == "test" and not (e.get("detail") or {}).get("action")
                       for e in fresh_events)
-    print(f"\n門檻現況:預覽型 test = {'有' if has_preview else '缺'};"
+    print(f"\n送審硬門檻(assert_deployed):deploy 事件 = {'有' if last_deploy else '缺'}")
+    print(f"覆蓋率(非門檻,但沒驗過就是沒驗過):預覽型 test = {'有' if has_preview else '缺'};"
           f"已成功執行的 action = {', '.join(sorted(passed)) if passed else '(無)'}")
 
 
@@ -561,7 +579,7 @@ def main() -> None:
     p.add_argument("--slug", required=True)
     p.set_defaults(func=cmd_withdraw)
 
-    p = sub.add_parser("events", help="讀佈署/測試事件與送審門檻現況")
+    p = sub.add_parser("events", help="讀佈署/測試事件與覆蓋率現況")
     p.add_argument("--slug", required=True)
     p.set_defaults(func=cmd_events)
 

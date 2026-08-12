@@ -58,7 +58,7 @@
       ],
       "severity": "high",
       "capture": false,
-      "suggestion": "改寫為 ctx.http.call(\"<egress-slug>\", \"<path>\", method=..., body=...);憑證不要自帶 Authorization(閘道會剝掉),由租戶註冊 EgressService 時填入。slug 需在 _template_meta.json 的 required_egress 宣告(normalize_meta.py 會補),並記入安裝後設定清單。"
+      "suggestion": "改寫為 ctx.http.call(\"<egress-slug>\", \"<path>\", method=..., body=..., headers=...);第三方金鑰由 action 自己帶——進 setup_schema,action 端 ctx.secrets.get(...) 後組 headers={\"Authorization\": ...}(ADR 0010 domain-only,閘道不注入也不剝除)。slug 需在 _template_meta.json 的 required_egress 宣告(normalize_meta.py 會補),並記入安裝後設定清單。"
     },
     {
       "id": "hardcoded_url",

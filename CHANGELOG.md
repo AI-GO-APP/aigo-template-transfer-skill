@@ -4,6 +4,110 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.7.0
+
+同步 Developer 平台 `origin/main`(對到 2026-08-11,24c958a);上次同步是 2026-08-01。
+**鐵律 6 的憑證歸屬反轉**,故走 minor 而非 patch。
+
+### 已對正式平台實測(2026-08-12,developer.ai-go.app)
+
+prod 的 `GET /dev-docs/endpoints` 共 89 支,已含 `slug-check`/`restore`/`ext/storage`
+——**線上就是 main 的行為,沒有落後**。逐項實打:
+
+| 主張 | 實測 |
+|---|---|
+| 沙箱 egress domain-only | 帶 `auth_type=bearer` → **400**(訊息逐字為平台的 domain-only 說明);只帶 `base_url` → **200** |
+| metadata 型別閘 | `data_center_schema: []` → **400**「必須是物件(dict),收到 list:[]」 |
+| 建置產物靜默丟棄 | 送 28 檔(含 1 個 `.pyc`)→ 200,**回讀只有 27 檔**;這正是 0.6.4 會爆的假失敗。先濾再送 27 檔 → 回讀 27,相符 |
+| `assert_deployed` 放寬 | 全新版本、**0 筆 test 事件**、preflight ok → `POST submit` **200**(舊門檻會 422)。已立即 withdraw |
+| `GET /modules/slug-check` | 200 → `{slug, valid, available, reason, checked_live}` |
+
+驗證用的 scratch module 已 `DELETE` 並回讀確認 404;白老鼠的 metadata 逐欄比對與備份一致。
+
+**實測揪出的文件錯誤:metadata 的驗證失敗是 400 不是 422。**
+`api/modules.py` 的 `validate_metadata` ValueError → 400、`validate_tags_allowed` → 400;
+422 在本平台只留給**送審擋門**(preflight 有 fail、送審時無 deploy 紀錄、adopt 的架上
+metadata 不合規)。skill 的狀態碼表從 0.6.4 起就把 metadata 標在 422 那一行,查表會走錯行
+——SKILL.md「錯誤處理」、troubleshooting 狀態碼表、devportal-api.md 三處同步更正。
+
+### 反轉:憑證由 action 自帶,不再是「閘道注入」
+
+v0.4.0 立的「憑證不可自帶 `Authorization`,金鑰歸租戶註冊的 EgressService、由閘道注入」
+**已經是錯的**。AI GO ADR 0010(AI-GO#832)把 connector_proxy 改為 **domain-only**,
+Developer 平台 2026-08-03 跟上(ai-go-developer `34b2a7d`):
+
+- `dev_ctx._STRIPPED` 從「含 authorization」縮成 hop-by-hop only
+  (`host`/`content-length`/`proxy-*`),與 `connector_proxy._sanitize_headers` 逐字同語意
+- `_inject_auth` 注入路徑**兩邊都整支移除**;既有 service row 的 `auth_type`/`auth_config`
+  於 runtime 一律忽略
+
+照舊教義產出的模板,失效方式特別惡劣:**沙箱測得過、上線後 401**,而且錯誤浮現在
+「租戶新增渠道」這個離部署最遠的地方(平台 commit 訊息點名 line-cs-manager 1.1.0
+就是這樣)。反過來,自帶金鑰的模板(omni-cs-hub 1.1.0)先前是沙箱測不過。
+
+新寫法:金鑰進 `setup_schema` → action `ctx.secrets.get(...)` → 自組
+`headers={"Authorization": ...}` 傳給 `ctx.http.call`。EgressService 只剩 base_url 與政策。
+
+- SKILL.md 鐵律 6 重寫,並明講舊教義是錯的(舊版 SKILL.md 可能還在別人的 context 裡)
+- Phase 3 的 `ctx.http.call` 範例改為自帶憑證,加註位置參數順序
+  `(service, path, method, body, headers, params)`——SDK 走 positional list 過 RPC,
+  順序錯不報錯、只會把 body 塞進 headers
+- pollution-signals:「自帶 Authorization」從**必裁決項**改為「靠閘道注入的舊寫法」才是
+  必裁決項;`scan_rules.json` 的 `raw_http_outbound` suggestion 同步
+- troubleshooting 拆成兩條:「egress 未註冊」與「填了金鑰卻 401」,後者指向改寫
+
+### e2e:`--egress-file` 帶憑證會被平台 400,改為在門口擋掉
+
+平台 `21a5d28` 對非 `none` 的 `auth_type` 直接 400、`auth_config` 強制清空。
+`e2e_devportal.py` 先前照送這兩個鍵(`--egress-file` 的文件也明文教用戶填),
+真填了就是 S8 hard_fail。
+
+現在:body 只送 `base_url`/`is_active`/`allow_dynamic_host`/`timeout_ms`;egress 檔裡
+還留著 `auth_type`/`auth_config` 時**在註冊前就 SystemExit**,訊息指向 `--secrets-file`。
+刻意不靜靜丟掉——收下一份永遠不生效的憑證設定,等於讓用戶以為金鑰帶上了,
+然後在沙箱綠燈、上線 401 的地方才發現(與平台選擇「擋在門口」同一個理由)。
+
+### 送審門檻放寬,skill 的警告改為覆蓋率報告
+
+平台 `71cc866`(2026-08-04)把 `assert_deployed_and_tested` 收回成 `assert_deployed`:
+硬門檻只剩 preflight ok + 該版本至少一筆 deploy 事件。預覽測試與「每支 enabled action
+至少一次 success」都改為非強制——2026-07-28 那版加嚴在實務上把送審卡死在測試儀式
+(bump 不改碼也得逐支重跑)。
+
+skill 的 `submit-gate` 只是 warn,不會擋,但訊息說「送審會被平台擋下……或在 manifest 設
+`is_enabled:false` 停用」——那是**假警報**,會逼用戶去停用其實可以送審的 action。
+
+- phase 名 `submit-gate` → `action-coverage`、`submit-gate-events` →
+  `action-coverage-events`、`submit-gate-preview` → `preview-coverage`
+- 語氣改為「等於沒驗過就要上架——平台不擋了,所以摘報時要逐支點名並說明風險」。
+  **門檻放寬不等於品質放寬**:這件事改由本 skill 的 S9 人工閘把關
+- `devportal.py events` 把輸出拆成「送審硬門檻」與「覆蓋率(非門檻)」兩段
+- troubleshooting 的 S9 422 條目改標為「線上平台仍是舊門檻」(prod 由 release tag
+  觸發,可能落後 main),另補「佈署 0 次」條目——平台 `b7eab17` 起 bump 複製檔案會
+  補記 deploy 事件(`detail.source=bump`)
+
+### 其他平台同步
+
+- **建置產物**(平台 `d44d0ca`):`collect_files` 排除 `__pycache__/`、`*.pyc`/`*.pyo`、
+  `.DS_Store`、`Thumbs.db`。平台端是**靜默丟棄**,而 push 的寫後回讀拿檔數比對——
+  不先濾就是假失敗。判定函式 `common.is_build_artifact()`,清單照平台的保守版
+  (該規則來自事故:`.pyc` 進了版本檔案,AI GO 讀取端硬解 UTF-8 失敗,租戶建 App 500)
+- **AI GO 型別契約**(平台 `b7c985b`):`normalize_meta.aigo_type_problems()` 在 S6 就驗
+  容器型別與 `tags` 每一項是字串,`devportal.build_metadata` 在 S7 再驗一次
+  (pull/adopt 進來的 meta 沒走過 normalize_meta)。擋的是「Developer 端全綠、按下發布
+  才 422」——那一刻版本已 submitted、不能再編輯。實例:`data_center_schema: []`
+  (零自建表的模板很自然會這樣寫,因為 `data_references_schema` 就是陣列)
+- **`unpublished` 狀態**(平台 `c47b3a5`):模組狀態多一個值,下架不再落回 `draft`,
+  且全部版本轉 `superseded`;新增 `POST /modules/{id}/restore`(→ `draft`,**不會復架**)。
+  SKILL.md Phase 7 與 devportal-api.md 記入,並點明 `withdraw` 與「下架」是兩回事
+- **沙箱 `/ext/storage/*`**(平台 `d3ffe1f`、`d5d76f0`):upload/url/list/delete 四支補齊,
+  external 模板的檔案上傳週期現在在沙箱跑得完(先前整條路徑一步都測不到,而且
+  前端零網路請求、按鈕沒 disabled,看起來像 app 壞了)。已知偏差:`/url` 的 `url` 恆為
+  `None`(沒有位元組可簽);`list` 是單層不遞迴
+- **`GET /modules/slug-check`**(平台 `5ffb001`)、模組/版本刪除的三道限制
+  (平台 `caf4f1c`:發布過一律 409、admin 無後門)寫入 devportal-api.md
+- devportal-api.md 的基準日改標為「對到 origin/main 2026-08-11」
+
 ## 0.6.4
 
 修正「任何帶自建表的模板,S8 必然 hard_fail」——e2e 打的是已退場的端點面。

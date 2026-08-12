@@ -19,15 +19,19 @@
 - **硬編碼網址**:客戶專屬網域 → 刪或參數化;第三方 API 端點 → **改走 egress 閘道**
   `ctx.http.call("<slug>", "<path>")`,base_url 落在租戶註冊的 EgressService。
   slug 必須記入「安裝後設定清單」——安裝租戶要在後台 `/dashboard/settings/integrations`
-  以同名 slug 註冊(填 base_url 與自己的金鑰),否則 action 一律連不出去
+  以同名 slug 註冊(填 base_url;domain-only,不填金鑰),否則 action 一律連不出去
   (這是設定問題,改 code 改不掉)。
 - **raw `httpx` / `requests` / `urllib.request`**:runner 是 default-deny egress
-  (ADR-0003:SG 只放行 ctx-only service),raw 連線**直接 timeout**——沙箱測不過,
-  而送審門檻要求每支 enabled action 至少一次 success,等於卡死。一律改 `ctx.http.call`。
-- **自帶 `Authorization` header**:即使用了 `ctx.http.call`,自己組
-  `headers={"Authorization": ...}` 也沒用——AI GO `_sanitize_headers` 與 Developer 平台
-  `dev_ctx._STRIPPED` 兩邊都會剝掉,實測回 401。金鑰歸 EgressService,action 不碰;
-  連帶地也不要為它開 `setup_schema` 欄位。
+  (ADR-0003:SG 只放行 ctx-only service),raw 連線**直接 timeout**——沙箱測不過。
+  一律改 `ctx.http.call`。
+- **靠閘道注入憑證的舊寫法**:`ctx.http.call` 不帶任何 `Authorization`、指望
+  EgressService 上的 `auth_type`/`auth_config` 被閘道注入。**2026-08-03 起這條路已封**
+  (AI GO ADR 0010 domain-only):`_inject_auth` 從 AI GO 與 Developer 兩邊的 runtime
+  整支移除,既有 service row 上的憑證欄位一律忽略。這種寫法的可怕之處是
+  **沙箱測得過、上線後 401**,錯誤浮現在「租戶新增渠道」離部署最遠的地方。
+  改法:金鑰進 `setup_schema`,action 端 `ctx.secrets.get(...)` 讀出來自組
+  `headers={"Authorization": ...}` 傳給 `ctx.http.call`——閘道現在只剝 hop-by-hop,
+  Authorization 原樣轉送。
 - **前端舊制 Custom Data SDK**(`submitRecord/listRecords/...`):綁 objectId 的舊資料通道。
 
 ## 逐條確認(medium)
@@ -43,10 +47,11 @@
   排程(app-crons)是 app 級設定、不在 VFS 裡——兩者都不會跟著 VFS 走。S1 盤點寫入
   inventory.json,轉換後由「安裝後設定清單」告知安裝租戶重新登記/重建;
   webhook/排程 action 必須冪等(平台 at-least-once,可能重複執行)。
-- **Egress service**:action 對外呼叫走閘道,租戶要以**同名 slug** 註冊 EgressService
-  (base_url + 該租戶自己的憑證)。S1 從 action 原始碼撈出全部對外網域與
-  `ctx.http.call` 的 slug 寫入 inventory.json;轉換後 slug 進 `required_egress` 宣告
-  (安裝流程會主動提示租戶),網域則進安裝後設定清單供租戶填 base_url。
+- **Egress service**:action 對外呼叫走閘道,租戶要以**同名 slug** 註冊 EgressService。
+  ADR 0010 之後 service 上**只有 base_url 與政策**,憑證不在那裡——所以第三方金鑰
+  是 `setup_schema` 的事,兩者都要進安裝後設定清單。S1 從 action 原始碼撈出全部
+  對外網域與 `ctx.http.call` 的 slug 寫入 inventory.json;轉換後 slug 進
+  `required_egress` 宣告(安裝流程會主動提示租戶),網域則供租戶填 base_url。
 - **INJ 三檔**(`src/data.json`、`src/db.json`、`src/actions.json`):本身就是租戶資料快照
   (表定義含真實 id、Data Reference 含快取資料列)。S1 抽取時自動改空殼,原件留 raw/。
 - **真實資料**:模板的 demo 資料必須是創作的(繁中、台灣在地化),不得沿用客戶資料——

@@ -45,15 +45,21 @@ python scripts/check_update.py     # macOS / Linux 用 python3
    不讀、不轉、不輸出。掃到舊制 API(`ctx.db.*_object`)一律改寫為新制。
 5. **C 層不做。** 非 custom app(獨立 Next.js/Express/Flutter 等)不進本流程;
    轉換它們等於重寫,直接向用戶說明排除。
-6. **對外呼叫一律走 egress 閘道 `ctx.http.call`。** action 呼叫第三方 API 的正解是
-   `ctx.http.call("<egress-slug>", "<path>", method=..., body=...)`,並在
-   `_template_meta.json` 的 `required_egress` 宣告該 slug(normalize_meta.py 會自動補)。
-   **憑證不可自帶**:`Authorization` header 會被閘道剝掉(AI GO `connector_proxy._sanitize_headers`
-   與 Developer 平台 `dev_ctx._STRIPPED` 兩邊都剝),金鑰由租戶註冊 EgressService 時填入、
-   閘道注入;action 端不碰金鑰,故也不需要為它開 `setup_schema` 欄位。
+6. **對外呼叫一律走 egress 閘道 `ctx.http.call`,金鑰由 action 自己帶。** action 呼叫
+   第三方 API 的正解是 `ctx.http.call("<egress-slug>", "<path>", method=..., body=...,
+   headers=...)`,並在 `_template_meta.json` 的 `required_egress` 宣告該 slug
+   (normalize_meta.py 會自動補)。
+   **憑證自帶才是正道(2026-08-03 反轉,ADR 0010 domain-only)**:閘道只驗域名與政策,
+   **不注入也不剝除** `Authorization`——AI GO `connector_proxy._sanitize_headers` 與
+   Developer 平台 `dev_ctx._STRIPPED` 現在都只剝 hop-by-hop(`host`/`content-length`/
+   `proxy-*`)。金鑰走 `setup_schema` 收編、action 端 `ctx.secrets.get(...)` 讀出來組
+   headers;EgressService 只提供 base_url 與白名單,`auth_type` 一律 `none`
+   (沙箱端填別的值會 400)。
+   **舊教義(v0.6.x 以前)寫「憑證不可自帶、金鑰歸 EgressService 注入」,那已經是錯的**
+   ——照舊寫法產出的模板沙箱測得過、上線後 401,而且錯誤浮現在「租戶新增渠道」
+   離部署最遠的地方。看到舊模板是注入式寫法,改成自帶。
    **`import httpx` 打不出去**:runner pod 是 default-deny egress(ADR-0003,SG 只放行
-   ctx-only service),raw httpx/requests 會直接 timeout——沙箱測不過,而送審門檻要求
-   每支 enabled action 至少一次 success,等於卡死。
+   ctx-only service),raw httpx/requests 會直接 timeout,沙箱測不過。
 7. **憑證紀律。** 密碼只存在 `~/.aigo-transfer/.env` 且由**用戶本人**填寫;agent 不代填、
    不在對話中詢問密碼、不把密碼放進指令列。用戶若在對話貼出密碼,提醒改填 `.env` 並更換。
 8. **出錯先查表。** 任何失敗先讀原始 error message 再查
@@ -189,13 +195,15 @@ python scripts/apply_decisions.py --slug <slug>           # 套用 + 複掃收�
 
 ```python
 def execute(ctx):
-    # service slug 對應租戶註冊的 EgressService(base_url + 憑證都在那裡);
-    # 這裡只寫 slug 與 path,不碰金鑰、不自帶 Authorization(閘道會剝掉)。
+    # slug 對應租戶註冊的 EgressService,那裡只有 base_url(domain-only,ADR 0010);
+    # 金鑰由 action 自己帶——閘道不注入也不剝除 Authorization。
+    token = ctx.secrets.get("EXAMPLE_API_TOKEN")
     resp = ctx.http.call(
         "example-api",
         "/v1/send",
         method="POST",
         body={"text": ctx.params.get("text")},
+        headers={"Authorization": f"Bearer {token}"},
     )
     if int(resp.get("status") or 500) >= 400:
         ctx.response.json({"error": "外部服務暫時無法使用", "status": resp.get("status")})
@@ -203,8 +211,13 @@ def execute(ctx):
     ctx.response.json(resp.get("data") or {})
 ```
 
+> `ctx.http.call` 的位置參數順序是 `(service, path, method, body, headers, params)`
+> ——SDK 走 positional list 過 RPC,順序錯不會報錯,只會把 body 塞進 headers。
+> 用具名參數寫就不會踩到。
+
+金鑰記入 `setup_schema`(`{"EXAMPLE_API_TOKEN": {"type": "secret", ...}}`),
 slug 記入「安裝後設定清單」:租戶要在後台 `/dashboard/settings/integrations` 以**同名 slug**
-註冊 EgressService(填 base_url 與該租戶自己的金鑰),否則 action 連不出去——這是設定問題,
+註冊 EgressService(只需填 base_url),否則 action 連不出去——這是設定問題,
 改 code 改不掉。`required_egress` 宣告會讓安裝流程主動提示租戶完成這一步。
 
 webhook / 排程觸發的 action 改寫時**必須保持冪等**(平台 at-least-once,可能重複執行);
@@ -293,6 +306,12 @@ python scripts/devportal.py bump --slug <slug> --kind minor     # 已發布 → 
 要核對平台實際存了什麼、或接手一支不是本機轉出來的模板:
 `python scripts/devportal.py pull --slug <slug>`。
 
+> **模組狀態多了 `unpublished`**(平台 2026-08-11):曾上架後被下架的模組狀態是
+> `unpublished` 而非 `draft`,且**全部版本會被設為 `superseded`**——所以下架後要繼續
+> 開發,`push` 會告訴你先 `bump`。取消下架(`POST /modules/{id}/restore`,portal 上
+> 的「取消下架」)只把狀態改回 `draft`,**不會復架**;要再上架只能重新送審核准。
+> `withdraw`(撤回送審)與「下架」是兩件不同的事,別混用。
+
 ## Phase 8:沙箱端到端測試(S8)
 
 ```bash
@@ -305,7 +324,7 @@ python scripts/e2e_devportal.py --slug <slug> --quick      # 快速檔(迭代中
 | 檔位 | 內容 | 用途 |
 |---|---|---|
 | `--quick` | preflight + 沙箱 secrets + 每張表 CRUD(insert→list→update→delete) | 只改文案/CSS 後的快速重驗;不記 test 事件、不推進狀態機 |
-| full(預設) | quick + 沙箱 egress 註冊 + 全部 enabled action 執行 + `seed_demo_data` 冪等重跑 + test 事件 | **送審前必須**;S9 會檢查最後一次 e2e 是 full |
+| full(預設) | quick + 沙箱 egress 註冊 + 全部 enabled action 執行 + `seed_demo_data` 冪等重跑 + test 事件 | **送審前必須**(本 skill 的要求,平台已不強制);S9 會檢查最後一次 e2e 是 full |
 
 e2e 的表 CRUD **分兩個面跑**,兩者的端點不同、不可互串(細節見
 `references/devportal-api.md`「資料面有兩組」):
@@ -320,29 +339,39 @@ e2e 的表 CRUD **分兩個面跑**,兩者的端點不同、不可互串(細節�
 讓平台自己產樣本列,seed→list→query→update→delete,鑑別力不變(表不存在 seed 回 4xx)。
 seed 回 5xx 是平台端產樣本列出錯,降為唯讀驗證並記 WARN,**寫入路徑未驗要向用戶帶到**。
 
-**送審門檻(平台 2026-07-28 更新)**:每支 enabled action 必須在最後 deploy 後
-於沙箱**成功跑過一次**——執行紀錄由伺服器自動記,前端不可宣稱。e2e 的
-`submit-gate` 條目改為**跟伺服器對帳**(`GET .../events`),不再只用本地報告推算;
-任何時候都可以單獨查現況:
+**送審門檻(平台 2026-08-04 放寬)**:硬門檻只剩 **preflight ok + 該版本至少一筆
+deploy 事件**(`assert_deployed`)。預覽測試與「每支 enabled action 至少一次 success」
+**都已改為非強制**——2026-07-28 那版加嚴在實務上把送審卡死在測試儀式(bump 不改碼
+也得逐支重跑),平台已收回。
+
+**但門檻放寬不等於品質放寬。** e2e 的 `submit-gate` 條目仍跟伺服器對帳
+(`GET .../events`),沒跑過的 action 照樣列出來——只是語氣從「會被平台擋下」改為
+「未經驗證,送審前要向用戶交代」。**沒跑過就送審 = 沒人驗過的 code 上架**,
+這件事由本 skill 的人工閘(S9)把關,不再指望平台擋。任何時候都可單獨查現況:
 
 ```bash
 python scripts/devportal.py events --slug <slug>
 ```
 
 這代表:
-- `--expect allow_fail_actions` 只影響本地報告判讀,**擋不住平台端**;
-  真跑不通的 action 只有兩條路:補真憑證(`--secrets-file`/`--egress-file`)重跑,
+- `--expect allow_fail_actions` 宣告過的 action 不會擋住送審,但**必須在摘報時逐支
+  點名**:哪支沒驗過、為什麼(缺真實憑證/外部服務不可達)、風險是什麼。
+- 真跑不通又不想帶風險上架的,仍是那兩條路:補真憑證(`--secrets-file`)重跑,
   或 manifest 設 `is_enabled:false` 停用後重新 push。
-- e2e 報告的 `submit-gate` 條目會列出會被擋的 action,向用戶摘報時務必帶到。
-- prod 部署改由 release tag 觸發,線上平台可能尚未套用此門檻——以實際送審回應為準。
+- `bump` 出來的版本現在會自動記一筆 deploy 事件(`detail.source=bump`),不會再
+  卡在「佈署 0 次」而送不出去。
+- prod 部署由 release tag 觸發,線上平台可能落後 main——若送審意外被 422 擋下且
+  訊息提到 action 未執行,那是舊門檻仍在線上,依舊訊息補跑即可。
 
 判讀規則(寫進報告,向用戶摘報時逐條說明):
 - **dummy 金鑰下的 pass 不等於完整可用性**:action 可能只走到早退路徑
   (如驗簽失敗即回)就回 2xx,深層邏輯並未執行。向用戶摘報時凡以 dummy 值
   通過的 action 都要標注「淺層通過」;正式上架品質以真值測試為準。
-- 需要真實第三方連線的 action:第三方憑證歸 EgressService——用 `--egress-file`
-  給 slug 的真實 base_url/auth_config;業務型金鑰(非 Authorization 用途)才走
-  `--secrets-file`。都給不了就在 `--expect` 的 `allow_fail_actions` 宣告並說明。
+- 需要真實第三方連線的 action:**憑證一律走 `--secrets-file`**(對應 setup_schema 的
+  key,action 自己組 Authorization);`--egress-file` 只給 slug 的真實 `base_url`
+  與 `allow_dynamic_host`——沙箱 egress 是 domain-only,填 `auth_type`/`auth_config`
+  會被平台 400 擋下(鐵律 6)。都給不了就在 `--expect` 的 `allow_fail_actions`
+  宣告並說明。
 - runner 503 = 平台側未開 action runner → 記 SKIP;送審前向用戶明確標注此風險。
 - `approval_status: "pending"` / 簽核例外 → 記 WARN,**非失敗、不可重試**
   (重試 = 重複建單 + 重複開簽核單)。
@@ -380,8 +409,12 @@ submit 內建寫後回讀:確認版本狀態已轉 `submitted`。
 
 常見狀態碼語義:**401** 認證失效(PAT 撤銷/過期)|**403** 權限
 (Developer 端 read_only / AI GO 端缺 builder.access,**不重試不繞路**)|
-**409** slug 撞名或版本線衝突|**422** metadata/preflight 輸入不合法|
-**400** 業務規則|**503** 沙箱 runner 未配置(平台設定,非程式問題)。
+**409** slug 撞名或版本線衝突|**400** metadata 驗證失敗(型別契約、category、tags
+白名單)與其他輸入不合法|**422** **送審擋門**(preflight 有 fail、或該版本無佈署紀錄)|
+**503** 沙箱 runner 未配置(平台設定,非程式問題)。
+
+> metadata 錯誤是 **400 不是 422**(2026-08-12 對正式平台實測確認:
+> `PUT metadata` 的 `validate_metadata` ValueError → 400)。查表時別走錯行。
 
 **Egress / 權限類錯誤 = 設定問題**:立刻停止改 code,把原始訊息轉給用戶,
 引導到後台 `/dashboard/settings/integrations`(或請租戶管理員/平台 admin 處理)。

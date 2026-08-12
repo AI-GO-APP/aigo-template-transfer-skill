@@ -31,6 +31,51 @@ CATEGORIES = {
 ACCESS_MODES = {"internal", "external", "self_built"}
 META_DECISION_KEY = "meta"
 
+# AI GO `POST /templates` 的容器型別契約(對齊 ai-go `app_template.py` 的
+# TemplateUpsertRequest,與平台 template_helpers._AIGO_UPSERT_TYPES 同一份)。
+#
+# 為什麼要在 S6 就擋:核准發布時 metadata 是**整包轉送**給 AI GO 的,那邊的 Pydantic
+# 型別閘跑在任何語意驗證之前。這些型別錯誤在 Developer 端一路綠燈(DSL parser 對
+# None/{}/[] 一律回空表列),按下發布才 422——而那一刻版本已經 submitted、不能再編輯,
+# 只能撤回、改、重新送審、再等一次審。實際踩到的是 `data_center_schema: []`
+# (零自建表的模板很自然會這樣寫,因為 data_references_schema 就是陣列)。
+#
+# 平台 2026-08-11 起也在自己這端擋(validate_metadata + preflight),這裡只是把同一件事
+# 提前到本地——不必推上去才知道。scalar 欄位刻意不驗:AI GO 的 Pydantic 跑 lax mode
+# 會隱式轉型,驗嚴了是假警報。
+AIGO_CONTAINER_TYPES = {
+    "tags": list,
+    "setup_schema": dict,
+    "required_egress": dict,
+    "data_center_schema": dict,
+    "data_references_schema": list,
+}
+_TYPE_LABEL = {list: "陣列(list)", dict: "物件(dict)"}
+
+
+def aigo_type_problems(meta: dict) -> list[str]:
+    """只驗**有提供**的鍵;缺鍵由平台 build_publish_metadata 的 setdefault 兜住。"""
+    problems = []
+    for key, expected in AIGO_CONTAINER_TYPES.items():
+        if key not in meta or meta[key] is None:
+            continue
+        value = meta[key]
+        if not isinstance(value, expected):
+            hint = ""
+            if key == "data_center_schema" and isinstance(value, list):
+                hint = "——沒有自建表就整個不要送這個 key,不要送 []"
+            problems.append(
+                f"{key} 必須是{_TYPE_LABEL[expected]},收到 "
+                f"{type(value).__name__}:{str(value)[:60]}{hint}"
+                f"(AI GO TemplateUpsertRequest 的型別閘,發布時才擋就來不及改了)")
+    tags = meta.get("tags")
+    if isinstance(tags, list):
+        bad = [t for t in tags if not isinstance(t, str)]
+        if bad:
+            problems.append(f"tags 的每一項都必須是字串,收到 {bad}"
+                            f"(AI GO 是 List[str],只驗外層會漏掉這種)")
+    return problems
+
 
 def refresh_inventory(work, template) -> dict:
     """以目前 template 內容重盤 webhook/egress/legacy(S1 快照在 S3 改寫後會過時,
@@ -208,6 +253,7 @@ def main() -> None:
         problems.append(f"access_mode 須為 {sorted(ACCESS_MODES)}")
     if "custom_objects_schema" in meta:
         problems.append("不得含 custom_objects_schema(舊制退場)")
+    problems.extend(aigo_type_problems(meta))
     if problems:
         for p in problems:
             print(f"[FAIL] {p}")

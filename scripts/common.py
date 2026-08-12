@@ -78,6 +78,24 @@ TEXT_EXT = {
     ".yml", ".yaml", ".py", ".sql", ".toml", ".cfg", ".ini", ".env", ".sh",
 }
 
+# 建置產物:平台 template_helpers.is_excluded_artifact 會在入庫與發布兩處各丟一次
+# (2026-08-04 事故:預覽跑 action 產生的 actions/__pycache__/*.pyc 進了版本檔案,
+# AI GO 讀取端對二進位檔硬解 UTF-8 失敗,租戶建 App 直接 500)。
+# 這裡照同一份清單先濾掉——不濾的話平台會靜靜丟掉,而 push 的寫後回讀會拿
+# 「已推送 N 檔」跟平台實際入庫數比對,對不上就變成假失敗。清單刻意保守。
+ARTIFACT_DIRS = {"__pycache__"}
+ARTIFACT_SUFFIXES = {".pyc", ".pyo"}
+ARTIFACT_NAMES = {".DS_Store", "Thumbs.db"}
+
+
+def is_build_artifact(rel_posix: str) -> bool:
+    """`rel_posix` 是 template/ 底下的 posix 相對路徑。"""
+    parts = rel_posix.split("/")
+    if ARTIFACT_DIRS.intersection(parts[:-1]):
+        return True
+    name = parts[-1]
+    return name in ARTIFACT_NAMES or any(name.endswith(s) for s in ARTIFACT_SUFFIXES)
+
 
 def utf8_stdout() -> None:
     """Windows 主控台預設 cp950,強制 UTF-8 避免中文輸出崩潰。"""

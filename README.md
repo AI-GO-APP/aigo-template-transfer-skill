@@ -18,7 +18,7 @@
 - **一律新制**:只產 `data_center_schema`(version=1),舊制 CustomObject 不讀不轉,
   掃到舊 API 一律要求改寫。
 - **Developer 平台整合**:PAT 引導設置、建模組推草稿、平台 preflight、沙箱 secrets/CRUD/actions
-  端到端測試、test 事件與送審門檻。
+  端到端測試、test 事件與 action 覆蓋率對帳。
 
 ## 安裝方式
 
@@ -123,8 +123,8 @@ python scripts/transfer_cli.py init --slug my_template
 | 指令 | 用途 |
 |---|---|
 | `devportal.py bump --kind minor` | 已發布模組開下一版(會重置 S8/S9) |
-| `devportal.py withdraw` | 撤回送審——送審中不可改內容 |
-| `devportal.py events` | 佈署/測試事件與送審門檻現況(伺服器真相) |
+| `devportal.py withdraw` | 撤回送審——送審中不可改內容(與平台的「下架」是兩回事) |
+| `devportal.py events` | 佈署/測試事件與 action 覆蓋率(伺服器真相) |
 | `devportal.py pull` | 把平台上的版本檔案取回本機 |
 | `devportal.py live-templates` | 架上清單(S0 比對重疊) |
 | `devportal.py adopt --template-slug x` | 接管未受管的架上模板(admin,**不可逆**) |

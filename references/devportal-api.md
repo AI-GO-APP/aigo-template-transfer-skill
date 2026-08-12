@@ -1,7 +1,7 @@
 # AI GO Developer 平台 API 摘要(本 skill 用到的子集)
 
 Base:`https://developer.ai-go.app/api/v1`。權威清單:`GET /dev-docs/endpoints`(即時導出,含 min_level)。
-本檔整理自 ai-go-developer 實碼(2026-07-28);漂移時以自省端點為準。
+本檔整理自 ai-go-developer 實碼(對到 origin/main 2026-08-11);漂移時以自省端點為準。
 
 ## 認證
 
@@ -16,7 +16,9 @@ Base:`https://developer.ai-go.app/api/v1`。權威清單:`GET /dev-docs/endpoint
 | Method / Path | 說明 |
 |---|---|
 | `POST /modules` | body `{slug, name, category, access_mode}` → 201 `{id, slug}`;**自動建 1.0.0 draft** |
-| `GET /modules?mine=true` | 我的模組 |
+| `GET /modules/slug-check?slug=` | 建立前預檢 → `{slug, valid, available, reason, checked_live}`(2026-08-12 實測)。canonical 格式 → 本地唯一 → AI GO 架上撞名;**只回報不阻擋**,AI GO 離線時 `checked_live=false`。後端 `POST /modules` 的 409 仍是最終把關 |
+| `GET /modules?mine=true` | 我的模組;**狀態一律全回,含已下架**(下架模組的 slug 仍被佔用) |
+| `POST /modules/{mid}/restore` | 取消下架 `unpublished` → `draft`;**不會復架**,要再上架只能重新送審核准。非下架狀態回 409 |
 | `GET /modules/{mid}` | 詳情含 `versions[]`(id/version/state/metadata) |
 | `PUT /modules/{mid}/versions/{vid}/metadata` | `{metadata: {...}}` 整包覆寫 |
 | `PUT /modules/{mid}/versions/{vid}/files` | `{files:[{file_path,content,is_binary}]}` **全量取代**,自動記 deploy 事件 |
@@ -30,17 +32,29 @@ Base:`https://developer.ai-go.app/api/v1`。權威清單:`GET /dev-docs/endpoint
 注意:
 - 建模組後**不要** `POST /versions`——存在進行中版本線(draft/rejected/submitted)會 409。
   已發布(approved)的模組要出下一版才用它,這也是唯一的路。
+- 模組狀態:`draft` / `in_review` / `published` / `rejected` / **`unpublished`**(2026-08-11
+  新增;曾上架後被下架,原本會落回 `draft`)。下架同時把全部版本設為 `superseded`。
 - 版本狀態機:draft → submitted → approved/rejected;approved 後舊版 superseded。
-- **送審門檻(2026-07-28 更新)**:preflight ok + ≥1 筆 deploy 事件 + 最後 deploy 之後:
-  (a) 一筆**無 detail.action** 的 test 事件(預覽測試,可手動 POST);
-  (b) **每支 enabled action**(排除 `actions/_shared/`、扣 manifest `is_enabled:false`)
-  至少一筆 `detail.status=="success"` 的 test 事件——由沙箱執行端點**伺服器自動記錄**,
-  手動 POST 宣稱無效。跑不通的 action 只能補憑證跑通或停用。
+- **送審門檻(2026-08-04 放寬)**:`assert_deployed` — preflight ok + 該版本**至少一筆
+  deploy 事件**。就這樣。2026-07-28 加嚴的兩項(最後 deploy 後要有預覽測試、每支
+  enabled action 至少一筆 `detail.status=="success"`)**已改為非強制**,前端仍顯示
+  測試次數但只是參考資訊。
+  - `PUT files` 記 deploy 事件;**`POST /versions`(bump)複製檔案也會記**
+    (`detail.source=bump`,2026-08-04 起)——先前 bump 不改碼會永遠停在「佈署 0 次」。
+  - 沙箱執行 action 時伺服器仍自動記 test 事件(`detail.action`/`status`),手動 POST
+    的 test 事件仍無法偽造 `detail.action`——對帳資訊還在,只是不再是門檻。
+  - **prod 由 release tag 觸發部署,可能落後 main**;skill 應容忍新舊兩種行為。
+- **刪除限制**(2026-08-04 釘測試):模組發布過(含曾上架後下架)一律 409,**admin 也沒有
+  後門**;未發布模組是 hard delete。版本刪除限 `draft`/`rejected` 且至少留一版。
+  「下架 → 刪除」不是後門。
 - `actions/_shared/**.py` 是共用模組(issue #497):不要求 `execute(ctx)`,
   沙箱執行時自動隨行注入 runner;不可當 action 呼叫。
 - 限制:MAX_FILES=500、50MB;路徑不得含 `\` 或 `..`;slug `^[a-z0-9][a-z0-9_-]*$`(底線正規化為 `-`)。
-- **部署節奏**:CI 改由 release tag 觸發部署 prod——developer.ai-go.app 可能落後 main;
-  skill 應容忍新舊兩種送審門檻行為。
+- **建置產物會被丟棄**(2026-08-04):`__pycache__/`、`*.pyc`/`*.pyo`、`.DS_Store`、
+  `Thumbs.db` 在 `prepare_files` 與發布出口各濾一次(事故:`.pyc` 進了版本檔案,
+  AI GO 讀取端硬解 UTF-8 失敗,租戶建 App 500)。**丟棄是靜默的**——2026-08-12 實測:
+  送 28 檔(含 1 個 `.pyc`)回 200,回讀只有 27 檔。推檔前自己先排除,否則寫後回讀的
+  檔數比對會變成假失敗。
 
 ## metadata 欄位
 
@@ -48,11 +62,30 @@ Base:`https://developer.ai-go.app/api/v1`。權威清單:`GET /dev-docs/endpoint
 vfs_factory_key, setup_schema, required_egress, data_center_schema,
 data_references_schema, author, version`
 
-- `custom_objects_schema` 非空會被 422 明確擋下(舊制退場)。
+- `custom_objects_schema` 非空會被 422 明確擋下(舊制退場);連 `{}` 也不要送——
+  語意閘只擋 truthy 值,空 dict 會溜到 AI GO 那邊撞 `schema_fields_must_be_list` 422。
+- **AI GO 型別契約已提前到 Developer 端**(2026-08-11,`validate_aigo_upsert_types`):
+  `validate_metadata()` 最前段逐欄對齊 AI GO `TemplateUpsertRequest`,preflight
+  (`check_publish_contract`)也跑同一組。先前這些只在按下發布時由 AI GO 422 擋下,
+  而那一刻版本已 submitted、不能再編輯。踩過的實例:`data_center_schema: []`
+  ——零自建表的模板很自然會這樣寫(因為 `data_references_schema` 就是陣列),
+  但 AI GO 宣告的是 `Optional[Dict]`,`[]` 直接 422。**沒有自建表就整個不要送這個 key。**
+  另外兩個容易漏的:`tags` 的**每一項**都要是字串;非 Optional 欄位
+  (name/description/category/access_mode/version/author)顯式送 `null` 一樣 422
+  (Pydantic 預設值只在「鍵不存在」時才套用)。
 - `data_center_schema`:可存,且**存檔即驗**(`ctx_core.template_dsl`,與 AI GO
-  upsert 同一套含成環偵測;不合法 PUT metadata 直接 422)。
+  upsert 同一套含成環偵測;不合法 PUT metadata 直接擋)。
+- **metadata 的驗證失敗一律回 400,不是 422**(`api/modules.py` 的 `validate_metadata`
+  ValueError → 400;`validate_tags_allowed` 也是 400)。422 在本平台只留給**送審擋門**:
+  preflight 有 fail、送審時該版本無 deploy 紀錄、adopt 的架上 metadata 不合規。
+  2026-08-12 對正式平台實測確認(`data_center_schema: []` → `400 data_center_schema
+  必須是物件(dict),收到 list:[]`)。
+- **存 metadata 會同步 `name`/`category` 回模組本體**(2026-08-11):先前 portal
+  header 與模組列表讀的是 `DevModule.name`,改名只寫進版本 metadata,兩者從不同步。
 - `required_egress`:`{slug: {label?, description?}}`——模板用到 `ctx.http.call(slug)`
   時必須宣告,租戶安裝時據此提示授權外部服務;preflight 會對比程式碼掃描結果(warn)。
+  **宣告的是「要連哪個服務」,不是憑證**——ADR 0010 之後 EgressService 上只有
+  base_url 與政策,第三方金鑰歸 `setup_schema`。
 - `category` 白名單 9 值;`tags` 必須取自 `GET /refs/tags`。
 - `setup_schema`:`{KEY: {type: text|secret|select, label, required?, options?}}`。
 
@@ -89,14 +122,24 @@ data_references_schema, author, version`
 | `GET /sandbox/v/{vid}/tables` | 各表筆數 |
 | `POST /sandbox/v/{vid}/tables/{table}/seed?count=N` | 灌假資料(**僅引用表**,會驗快照) |
 | `GET /sandbox/v/{vid}/tables/{table}/rows` | 讀沙箱資料(僅引用表) |
-| `GET/PUT /sandbox/v/{vid}/secrets` | 沙箱金鑰 |
-| `GET/PUT/DELETE /sandbox/v/{vid}/egress[/{slug}]` | 沙箱 egress;PUT body 支援 `allow_dynamic_host`(wildcard,`ctx.http.fetch` 用) |
+| `GET/PUT /sandbox/v/{vid}/secrets` | 沙箱金鑰(setup_schema 的 key;**第三方憑證放這裡**) |
+| `GET/PUT/DELETE /sandbox/v/{vid}/egress[/{slug}]` | 沙箱 egress;PUT body 只收 `base_url`、`is_active`、`timeout_ms`、`allow_dynamic_host`(wildcard,`ctx.http.fetch` 用)。**`auth_type` 非 `none` 一律 400**,`auth_config` 強制清空(domain-only,ADR 0010) |
+| `POST /sandbox/v/{vid}/ext/storage/upload` | external 檔案上傳,multipart 欄位名 `file`,可選 `folder` → `{path, url, size, filename, content_type}`。**沙箱不留位元組**,只記中繼資料 |
+| `GET /sandbox/v/{vid}/ext/storage/url?path=` | → `{path, url}`;前綴外 403、不存在 404。**`url` 恆為 `None`**(沒有位元組可簽),要驗「上傳後能開啟」得在 AI GO 上測 |
+| `DELETE /sandbox/v/{vid}/ext/storage/file?path=` | → `{status:"deleted", path}`;403/404 同上 |
+| `GET /sandbox/v/{vid}/ext/storage/list?folder=` | → `{folder, files:[{name, path}], count}`。**單層,不遞迴**(對齊正式端 S3 `Delimiter="/"`);dotfile 過濾 |
 | `GET /sandbox/v/{vid}/custom-app-auth/{slug}/me`、`POST .../logout` | external 模板的沙箱登入態 |
 | `POST /sandbox/v/{vid}/actions/apps/{app_id}/run/{name}` | 跑 action(internal);runner 未配置回 503;`is_enabled:false` 回 409;**執行結果由伺服器記成 test 事件(detail.action/status)** |
 | `POST /sandbox/v/{vid}/ext/actions/run/{name}` | 跑 action(external);同上自動記錄 |
 
-沙箱**寫入**與 test 事件回報需 `editor`(read_only 只能看)。新版 data_table SDK
-(自建表)沙箱已支援;沙箱與 AI GO prod 的已知行為差距已於 2026-07-28 收斂(PR #30)。
+沙箱**寫入**與 test 事件回報需 `editor`(read_only 只能看;storage 的 url/list 是讀取面,
+read_only 可讀不可刪)。新版 data_table SDK(自建表)沙箱已支援;沙箱與 AI GO prod 的
+已知行為差距已於 2026-07-28 收斂(PR #30)。
+
+> **`/ext/storage/*` 是 2026-08-02/03 才補上的**(PR #78、#88)。先前沙箱完全沒有
+> storage 面,任何帶檔案上傳的 external 模板,「選檔 → 上傳 → 寫入 → 列在紀錄」
+> 整條路徑一步都測不到,而且**前端零網路請求、按鈕也沒 disabled**,看起來像 app 壞了。
+> 模板走的是 SDK `src/services/portal.ts` 的 `uploadFile()`;現在這條在沙箱跑得完。
 
 前端 preview:`https://developer.ai-go.app/preview/{module_id}?v={version_id}`
 (esbuild-wasm 瀏覽器端編譯,3 秒無錯自動 POST test 事件)。
