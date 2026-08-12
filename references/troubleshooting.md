@@ -50,12 +50,15 @@
 | 跑完 S8 發現沙箱引用表資料變了 | 平台 seed 預設 `replace=True`,呼叫當下就清光該表這一版的既有列 | **預期行為,不是 bug**。跑 S8 前若沙箱有要留的手動測試資料,先自行備份;或改用 `POST .../tables/{t}/rows` 重貼 |
 | S8 action 全部 503 | runner 未配置 | 平台側設定;e2e 記 SKIP,送審前向用戶明確標注此風險 |
 | S8 approval_status: pending | 租戶簽核流程攔截 | **非失敗、不可重試**(重試 = 重複建單);記 WARN 即可 |
-| S8 action 需要真實憑證 | 第三方憑證歸 EgressService(閘道注入),dummy 註冊打不通 | `--egress-file` 給 slug 的真實 base_url/auth_config(業務型金鑰才走 `--secrets-file`);或 `--expect` 宣告 allow_fail 並向用戶說明 |
-| S9 被擋:e2e 是 quick | 送審要求 full | 重跑 `e2e_devportal.py --slug <slug>`(不帶 --quick) |
-| S9 422「這些 action 尚未成功執行過」 | 平台送審門檻:每支 enabled action 需在最後 deploy 後於沙箱成功跑過(伺服器記錄,不可宣稱) | 補真憑證(`--secrets-file`/`--egress-file`)重跑 full;真跑不通的在 manifest 設 `is_enabled:false` 停用後重新 push |
+| S8 action 需要真實憑證 | ADR 0010 之後憑證歸 `setup_schema`,action 自己帶;dummy 值打不通第三方 | `--secrets-file` 給真金鑰;`--egress-file` 只給該 slug 的真實 `base_url`。或 `--expect` 宣告 allow_fail 並向用戶說明 |
+| S8 egress 註冊 400「auth_type 僅接受 'none'」 | `--egress-file` 裡填了 `auth_type`/`auth_config`——沙箱 egress 是 domain-only(ADR 0010),閘道不注入認證 | 從 egress 檔移除這兩個鍵,金鑰改走 `--secrets-file`(action 端自組 Authorization) |
+| S9 被擋:e2e 是 quick | 送審要求 full(**本 skill 的要求**,平台已不強制) | 重跑 `e2e_devportal.py --slug <slug>`(不帶 --quick) |
+| S9 422「這些 action 尚未成功執行過」 | 線上平台仍是 2026-07-28 的舊門檻(prod 由 release tag 觸發,可能落後 main) | 依訊息補跑:`--secrets-file` 給真憑證重跑 full;真跑不通的在 manifest 設 `is_enabled:false` 停用後重新 push |
+| S9 422「尚未佈署」/ 佈署 0 次 | 該版本沒有 deploy 事件——`PUT files` 才會記,純 bump 曾經不記 | 平台 2026-08-04 起 bump 複製檔案會補記(`detail.source=bump`);線上若仍是舊版,重跑一次 `devportal.py push --slug <slug>` 即可 |
 | preflight warn:egress 未宣告 | 程式碼用了 `ctx.http.call(slug)` 但 metadata 缺 `required_egress` | 重跑 `normalize_meta.py`(會自動從盤點補宣告)→ 重新 push |
 | 沙箱寫入/測試 403 | read_only 帳號(2026-07-28 起沙箱寫入需 editor) | 請 admin 升級帳號 |
-| 對外呼叫被擋/401(egress) | 租戶未以同名 slug 註冊 EgressService,或 action 自帶 Authorization(閘道會剝掉) | **停止改 code**;引導用戶到後台 `/dashboard/settings/integrations` 註冊 slug(base_url + 憑證);action 端移除自帶憑證 |
+| 對外呼叫被擋(egress 未註冊) | 租戶未以同名 slug 註冊 EgressService | **停止改 code**;引導用戶到後台 `/dashboard/settings/integrations` 註冊 slug(只需 base_url) |
+| 對外呼叫 401,但 EgressService 明明填了金鑰 | ADR 0010 domain-only:閘道**不再注入** service 上的憑證,`auth_type`/`auth_config` runtime 一律忽略。舊模板靠注入的寫法沙箱測得過、上線就 401 | 改成自帶:金鑰進 `setup_schema`,action `ctx.secrets.get(...)` 後組 `headers={"Authorization": ...}` 傳給 `ctx.http.call`(回 Phase 3 補裁決) |
 | action 對外連線 timeout(~20s) | action 用 raw httpx/requests 直連——runner 是 default-deny egress | 改寫為 `ctx.http.call("<slug>", "<path>")`(回 Phase 3 補裁決);這是架構限制,重試無效 |
 
 ## 查不到怎麼辦

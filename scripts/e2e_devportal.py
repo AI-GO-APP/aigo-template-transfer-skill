@@ -12,17 +12,21 @@
 - full(預設):quick + 全部 action 執行 + seed_demo_data 冪等重跑 + test 事件。
   送審(S9)一律要求最後一次 e2e 是 full。
 
-送審門檻(2026-07-28 平台更新):最後 deploy 後需 (a) 一筆預覽型 test 事件,
-且 (b) **每支 enabled action 至少一筆 status=success 的沙箱執行紀錄**——由沙箱
-執行端點伺服器自動記錄,前端不可宣稱。full 檔跑過所有 action 即同時滿足;
-沒跑通的 action 只能補憑證重跑或 manifest 停用,--expect allow_fail 擋不住平台端。
+送審門檻(2026-08-04 平台放寬):硬門檻只剩 preflight ok + 該版本至少一筆 deploy
+事件(`assert_deployed`)。預覽測試與「每支 enabled action 至少一次 success」都已
+改為非強制——2026-07-28 那版加嚴把送審卡死在測試儀式,平台已收回。
+
+**門檻放寬不等於品質放寬。** 本腳本仍跟伺服器對帳每支 action 的執行紀錄,只是
+定位從「門檻試算」改為**覆蓋率報告**:沒驗過的 code 上架與否由 S9 人工閘決定,
+不再指望平台擋。摘報時要逐支點名沒跑過的 action。
 
 判讀規則:
 - runner 未配置(503)→ 該 phase 記 SKIP,不視為失敗,但會標注在報告
-  (注意:runner 不可用時 enabled action 無 success 紀錄,送審會被平台 422)
+  (注意:runner 不可用時全部 action 都沒驗過,等於整包沒測就要送審)
 - 回應含 approval_status=="pending" / 簽核例外 → 記 WARN 不記 FAIL:
   那是租戶簽核流程攔截(builder 核心規則 24),不是 bug,且**不可重試**
-- --expect 檔可宣告允許失敗的 action(如需要真實第三方憑證者)→ 記 WARN
+- --expect 檔可宣告允許失敗的 action(如需要真實第三方憑證者)→ 記 WARN。
+  平台不擋,所以這些 action 一律要在摘報時點名「未經驗證」
 - webhook 宣告的 action 在沙箱以一般 action 方式驗證;對外端點登記本身
   無法在沙箱測,已列入安裝後設定清單
 - 若要走瀏覽器 preview 的正式 test 事件,改用 --no-event,再開
@@ -52,7 +56,8 @@ def main() -> None:
                         help="快速檔:preflight+secrets+CRUD,不跑 action、不記 test 事件")
     parser.add_argument("--secrets-file", help="e2e 用 secrets 值 JSON({KEY: value})")
     parser.add_argument("--egress-file",
-                        help="沙箱 egress 設定 JSON({slug: {base_url, auth_type, auth_config, allow_dynamic_host}})")
+                        help="沙箱 egress 設定 JSON({slug: {base_url, allow_dynamic_host, timeout_ms}})"
+                             ";domain-only,不收憑證——第三方金鑰走 --secrets-file")
     parser.add_argument("--expect", help="期望設定 JSON({allow_fail_actions: [..]})")
     parser.add_argument("--no-event", action="store_true",
                         help="不自動記 test 事件(改走瀏覽器 preview)")
@@ -116,17 +121,32 @@ def main() -> None:
 
     # Phase 2.5: 沙箱 egress 註冊(required_egress 宣告的 slug 沒註冊,action 測不動;
     # 平台 preflight 也會 warn「缺沙箱註冊」)
+    #
+    # **domain-only(AI GO ADR 0010,2026-08-03)**:閘道不注入也不校驗憑證,service 上的
+    # auth_type/auth_config 於 runtime 一律忽略,平台端對非 none 的 auth_type 直接 400。
+    # 這裡也擋在門口而不是靜靜丟掉——收下一份永遠不生效的憑證設定,等於讓用戶以為
+    # 金鑰帶上了,然後在沙箱綠燈、上線 401 的地方才發現。
     required_egress = meta.get("required_egress") or {}
     egress_values = common.load_json(Path(args.egress_file)) if args.egress_file else {}
+    stale_auth = sorted(s for s, c in egress_values.items()
+                        if isinstance(c, dict)
+                        and (c.get("auth_type", "none") != "none" or c.get("auth_config")))
+    if stale_auth:
+        raise SystemExit(
+            f"[FAIL] --egress-file 這些 slug 還帶著 auth_type/auth_config:{', '.join(stale_auth)}\n"
+            f"       沙箱 egress 是 domain-only(ADR 0010),閘道不注入憑證,平台端會回 400。\n"
+            f"       改法:從 egress 檔移除 auth_type/auth_config(只留 base_url、\n"
+            f"       allow_dynamic_host、timeout_ms),第三方金鑰改走 --secrets-file——\n"
+            f"       action 端 ctx.secrets.get(...) 後自組 headers={{\"Authorization\": ...}}。")
     for slug in required_egress:
         cfg = egress_values.get(slug, {})
         body = {
             "base_url": cfg.get("base_url", "https://example.invalid"),
-            "auth_type": cfg.get("auth_type", "none"),
-            "auth_config": cfg.get("auth_config", {}),
             "is_active": True,
             "allow_dynamic_host": bool(cfg.get("allow_dynamic_host", False)),
         }
+        if cfg.get("timeout_ms"):
+            body["timeout_ms"] = int(cfg["timeout_ms"])
         status, resp = api(env, "PUT", f"/sandbox/v/{vid}/egress/{slug}", body=body)
         if status == 200:
             note = "真值" if slug in egress_values else "dummy base_url(該 slug 的 action 預期打不通)"
@@ -358,10 +378,10 @@ def main() -> None:
         elif isinstance(manifest, list):
             entries = {e.get("name"): e for e in manifest if isinstance(e, dict) and e.get("name")}
         for name, cfg in entries.items():
-            # is_enabled:false 的 action 沙箱執行回 409,且不列入送審門檻——直接跳過
+            # is_enabled:false 的 action 沙箱執行回 409,且不列入覆蓋率——直接跳過
             if isinstance(cfg, dict) and cfg.get("is_enabled") is False:
                 disabled.append(name)
-                run_phase(report, f"action:{name}", "skip", "manifest 已停用(不列入送審門檻)")
+                run_phase(report, f"action:{name}", "skip", "manifest 已停用(不列入覆蓋率)")
                 continue
             action_names.append(name)
 
@@ -400,15 +420,21 @@ def main() -> None:
             run_phase(report, f"action:{name}{tag}", "fail", f"HTTP {status}:{str(resp)[:200]}")
             hard_fail = True
 
-    # Phase 4.5: 送審門檻對帳——平台要求每支 enabled action 在最後 deploy 後
-    # 至少一筆 status=success 的沙箱執行紀錄(伺服器自動記,前端不可宣稱)。
-    # 先前這裡只拿本地報告推算;本地判定「pass」與伺服器真的記到事件是兩回事
-    # (例如 runner 回 2xx 但事件寫入失敗),所以改為 GET 事件跟伺服器對帳。
+    # Phase 4.5: 覆蓋率對帳——哪些 enabled action 在伺服器上真的跑成功過。
+    #
+    # 平台 2026-08-04 把送審門檻放寬回 assert_deployed(只驗「至少一筆 deploy 事件」),
+    # 「每支 enabled action 至少一次 success」與預覽測試都改為非強制。所以這一段
+    # **不再是門檻試算**,而是覆蓋率報告:平台不擋了,沒驗過的 code 還是沒驗過,
+    # 該由 S9 的人工閘擋。訊息措辭跟著改——說「送審會被擋下」會逼用戶去停用
+    # 其實可以送審的 action。
+    #
+    # 仍跟伺服器對帳(GET events)而非本地報告推算:本地判定「pass」與伺服器真的
+    # 記到事件是兩回事(例如 runner 回 2xx 但事件寫入失敗)。
     if not args.quick:
         status, events = api(env, "GET", f"/modules/{module_id}/versions/{vid}/events")
         if status != 200 or not isinstance(events, list):
-            run_phase(report, "submit-gate", "warn",
-                      f"無法讀取事件紀錄(HTTP {status}),改以本地報告推算門檻")
+            run_phase(report, "action-coverage", "warn",
+                      f"無法讀取事件紀錄(HTTP {status}),改以本地報告推算覆蓋率")
             succeeded = {r["phase"].split(":", 1)[1].replace("(webhook)", "")
                          for r in report
                          if r["phase"].startswith("action:") and "冪等" not in r["phase"]
@@ -425,25 +451,27 @@ def main() -> None:
                 and (e.get("detail") or {}).get("status") == "success"
                 and (e.get("detail") or {}).get("action")
             }
-            run_phase(report, "submit-gate-events", "pass",
+            run_phase(report, "action-coverage-events", "pass",
                       f"伺服器已記錄成功執行的 action:"
                       f"{', '.join(sorted(succeeded)) if succeeded else '(無)'}")
-            # 門檻的另一半:最後 deploy 後要有一筆**無 detail.action** 的 test 事件
-            # (預覽測試)。本腳本的 Phase 6 會補記,故 --no-event 時才需要提醒。
+            # 預覽型 test 事件(無 detail.action)。2026-08-04 起非強制,但它是唯一
+            # 驗過「前端編得起來、載入不炸」的紀錄,沒有就該講。
+            # 本腳本的 Phase 6 會補記,故 --no-event 時才需要提醒。
             has_preview = any(
                 e.get("kind") == "test" and (e.get("created_at") or "") >= last_deploy
                 and not (e.get("detail") or {}).get("action") for e in events)
             if not has_preview and args.no_event:
-                run_phase(report, "submit-gate-preview", "warn",
-                          "最後 deploy 後尚無預覽型 test 事件,送審會被擋——"
-                          f"請開 https://developer.ai-go.app/preview/{module_id}?v={vid}")
+                run_phase(report, "preview-coverage", "warn",
+                          "最後 deploy 後尚無預覽型 test 事件——前端載入路徑未驗"
+                          f"(平台不擋送審)。請開 https://developer.ai-go.app/preview/{module_id}?v={vid}")
 
         not_passed = [n for n in action_names if n not in succeeded and n not in disabled]
         if not_passed:
-            run_phase(report, "submit-gate", "warn",
+            run_phase(report, "action-coverage", "warn",
                       f"這些 enabled action 在伺服器上沒有「最後 deploy 之後的成功執行紀錄」,"
-                      f"送審會被平台擋下:{', '.join(not_passed)}"
-                      f"——補真憑證重跑,或在 manifest 設 is_enabled:false 停用")
+                      f"等於**沒驗過就要上架**:{', '.join(not_passed)}"
+                      f"——平台 2026-08-04 起不擋送審,所以摘報時要逐支點名並說明風險;"
+                      f"能補真憑證(--secrets-file)重跑最好,確定不用的在 manifest 設 is_enabled:false")
 
     # Phase 5: 表列筆數(資訊性)
     status, counts = api(env, "GET", f"/sandbox/v/{vid}/tables")
@@ -469,7 +497,7 @@ def main() -> None:
         print("[OK] quick 檔通過。送審前仍需跑 full(不帶 --quick)以完成可用性驗證。")
         return  # 不推進狀態機、不記 test 事件
 
-    # Phase 6: test 事件(送審門檻:最後 test 不早於最後 deploy)
+    # Phase 6: test 事件(平台已不強制,但這是「這一版被驗過」留在伺服器的紀錄)
     if args.no_event:
         print("[NOTE] 未記 test 事件。請開瀏覽器執行 preview 以產生正式 test 事件:")
         print(f"  https://developer.ai-go.app/preview/{module_id}?v={vid}")
@@ -480,7 +508,7 @@ def main() -> None:
         if status not in (200, 201):
             common.mark_stage(work, state, "S8_e2e", "failed", **summary)
             raise SystemExit(f"[FAIL] 記 test 事件失敗(HTTP {status}):{resp}")
-        print("[OK] 已記 test 事件(送審門檻已滿足)")
+        print("[OK] 已記 test 事件")
 
     common.mark_stage(work, state, "S8_e2e", "passed", **summary)
     if runner_down:

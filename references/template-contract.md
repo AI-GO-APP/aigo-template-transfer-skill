@@ -31,7 +31,9 @@ required_egress, data_center_schema, data_references_schema, author`
 
 - `required_egress`:`{slug: {label?, description?}}`——模板使用 `ctx.http.call(slug)`
   (對外呼叫的唯一正解)時必須宣告(normalize_meta 會自動從盤點補上),
-  租戶安裝時據此提示註冊同名 EgressService(base_url + 憑證由租戶填,閘道注入)。
+  租戶安裝時據此提示註冊同名 EgressService。**宣告的是「要連哪個服務」,不是憑證**
+  ——ADR 0010 domain-only 之後 EgressService 上只有 base_url 與政策,第三方金鑰歸
+  `setup_schema`、由 action 自組 `Authorization` header(SKILL.md 鐵律 6)。
 
 - category ∈ starter|messaging|crm|catering|integration|ai|operations|productivity|analytics
 - access_mode ∈ internal|external|self_built
