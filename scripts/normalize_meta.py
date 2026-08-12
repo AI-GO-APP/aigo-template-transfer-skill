@@ -105,7 +105,22 @@ def build_post_install_checklist(work, meta: dict) -> str:
     if secrets:
         lines.append("1. **金鑰設定**:安裝表單會詢問 " + "、".join(f"`{k}`" for k in secrets)
                      + ";未填的功能將無法運作。")
-    if inventory.get("egress_domains"):
+    # Egress:**slug 才是租戶真正要建的東西**。`ctx.http.call("<slug>", ...)` 是以 slug
+    # 解析服務的,名稱不符即視為未註冊。先前這裡只印網域,租戶照著做會建出一個
+    # 名字不對的服務,然後 action 依然連不出去——而訊息只會說「service 未註冊」,
+    # 對不上清單裡那條「加入網域」的指示。
+    # ADR 0010 domain-only 之後服務上只有 base_url,金鑰歸上面的安裝表單欄位。
+    if inventory.get("egress_slugs"):
+        lines.append("2. **Egress 服務註冊**:本模板的 action 經閘道對外呼叫,請租戶管理員在後台 "
+                     "`/dashboard/settings/integrations` 以**完全相同的 slug** 建立服務:"
+                     + "、".join(f"`{s}`" for s in inventory["egress_slugs"])
+                     + "。slug 名稱不符即視為未註冊,action 一律連不出去(這是設定問題,"
+                     "非程式錯誤)。服務只需填 base_url;**第三方金鑰請填在上面的安裝表單欄位,"
+                     "不要填在服務上**——閘道不注入憑證,填了不會生效。"
+                     + (f"\n   程式碼中出現的對外網域(供填 base_url 參考):"
+                        + "、".join(f"`{d}`" for d in inventory["egress_domains"])
+                        if inventory.get("egress_domains") else ""))
+    elif inventory.get("egress_domains"):
         lines.append("2. **Egress 白名單**:本模板的 action 會對外呼叫,"
                      "請租戶管理員在後台 `/dashboard/settings/integrations` 加入網域:"
                      + "、".join(f"`{d}`" for d in inventory["egress_domains"])
