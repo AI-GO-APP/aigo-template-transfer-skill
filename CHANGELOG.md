@@ -4,6 +4,28 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.7.2
+
+egress slug 放在常數裡就盤點不到,`required_egress` 因此少宣告。
+
+`_EGRESS_SLUG_RE` 只認第一個參數是**字串字面值**的寫法。把 slug 抽成模組級常數
+——`OPENAI_EGRESS = "openai"` 然後 `ctx.http.call(OPENAI_EGRESS, OPENAI_PATH, ...)`
+——是很自然的寫法,但盤點會完全漏掉,`normalize_meta` 於是不會補進 `required_egress`。
+
+漏掉的後果不在轉換階段:平台 preflight 只給 warn、audit 全綠、S8 也照樣過,
+但**租戶安裝時不會被提示授權該服務**,裝完 action 一律連不出去。錯誤浮現在
+離部署最遠的地方,而且看起來像 app 壞了。
+
+0.7.0 把 `ctx.http.call` 定為對外呼叫的唯一正解之後,這種寫法只會更多。
+2026-08-12 改寫白老鼠的 `github_webhook.py` 時實際踩到。
+
+- 新增 `_egress_slugs(text)`:字面值之外,再解析同檔案的模組級字串常數
+  (`NAME = "literal"`)並比對 `ctx.http.call(NAME, ...)`
+- **解不出來就不報**:`ctx.http.call(slug, ...)` 這種執行期決定的、以及跨檔 import
+  的常數都不追。誤報會讓模板宣告一個不存在的服務,租戶被要求授權用不到的東西
+  ——在這裡漏報比誤報安全
+- `TestInventory` 新增 3 例(常數、字面值與常數混用、解不出來不得亂猜)
+
 ## 0.7.1
 
 VERSION 檔帶 BOM 會讓**所有安裝者的自動更新從此靜靜地不再提示**。

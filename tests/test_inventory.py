@@ -49,6 +49,38 @@ class TestInventory(unittest.TestCase):
         inv = build_inventory(self.template, {}, None)
         self.assertEqual(inv["egress_slugs"], ["twse-mops"])
 
+    def test_egress_slug_from_module_constant(self):
+        """slug 放常數是很自然的寫法,漏掉的話 required_egress 就少宣告——
+        租戶安裝不會被提示授權該服務,裝完 action 一律連不出去。
+        2026-08-12 在白老鼠身上實際踩到。"""
+        (self.template / "actions" / "call_ext.py").write_text(
+            'OPENAI_EGRESS = "openai"\n'
+            'OPENAI_PATH = "/v1/responses"\n\n'
+            'def execute(ctx):\n'
+            '    ctx.http.call(OPENAI_EGRESS, OPENAI_PATH, method="POST")\n',
+            encoding="utf-8")
+        inv = build_inventory(self.template, {}, None)
+        self.assertEqual(inv["egress_slugs"], ["openai"])
+
+    def test_egress_slug_mixed_literal_and_constant(self):
+        (self.template / "actions" / "a.py").write_text(
+            'SVC = "erp"\ndef execute(ctx):\n    ctx.http.fetch(SVC, "https://x/y")\n',
+            encoding="utf-8")
+        (self.template / "actions" / "b.py").write_text(
+            'def execute(ctx):\n    ctx.http.call("line", "/v2/push")\n', encoding="utf-8")
+        inv = build_inventory(self.template, {}, None)
+        self.assertEqual(inv["egress_slugs"], ["erp", "line"])
+
+    def test_unresolvable_variable_is_not_guessed(self):
+        """解不出來就不報——誤報會讓租戶被要求授權一個根本用不到的服務。
+        跨檔 import 的常數也刻意不追(要追就得做真的符號解析)。"""
+        (self.template / "actions" / "call_ext.py").write_text(
+            'def execute(ctx):\n'
+            '    slug = ctx.params.get("svc")\n'
+            '    ctx.http.call(slug, "/x")\n', encoding="utf-8")
+        inv = build_inventory(self.template, {}, None)
+        self.assertEqual(inv["egress_slugs"], [])
+
 
 class TestPostInstallChecklist(unittest.TestCase):
     def setUp(self):
