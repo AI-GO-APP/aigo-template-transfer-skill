@@ -409,8 +409,12 @@ submit 內建寫後回讀:確認版本狀態已轉 `submitted`。
 
 常見狀態碼語義:**401** 認證失效(PAT 撤銷/過期)|**403** 權限
 (Developer 端 read_only / AI GO 端缺 builder.access,**不重試不繞路**)|
-**409** slug 撞名或版本線衝突|**422** metadata/preflight 輸入不合法|
-**400** 業務規則|**503** 沙箱 runner 未配置(平台設定,非程式問題)。
+**409** slug 撞名或版本線衝突|**400** metadata 驗證失敗(型別契約、category、tags
+白名單)與其他輸入不合法|**422** **送審擋門**(preflight 有 fail、或該版本無佈署紀錄)|
+**503** 沙箱 runner 未配置(平台設定,非程式問題)。
+
+> metadata 錯誤是 **400 不是 422**(2026-08-12 對正式平台實測確認:
+> `PUT metadata` 的 `validate_metadata` ValueError → 400)。查表時別走錯行。
 
 **Egress / 權限類錯誤 = 設定問題**:立刻停止改 code,把原始訊息轉給用戶,
 引導到後台 `/dashboard/settings/integrations`(或請租戶管理員/平台 admin 處理)。

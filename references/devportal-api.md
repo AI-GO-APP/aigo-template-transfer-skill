@@ -16,7 +16,7 @@ Base:`https://developer.ai-go.app/api/v1`。權威清單:`GET /dev-docs/endpoint
 | Method / Path | 說明 |
 |---|---|
 | `POST /modules` | body `{slug, name, category, access_mode}` → 201 `{id, slug}`;**自動建 1.0.0 draft** |
-| `GET /modules/slug-check?slug=` | 建立前預檢:canonical 格式 → 本地唯一 → AI GO 架上撞名。**只回報不阻擋**;AI GO 離線時回 `checked_live=false` |
+| `GET /modules/slug-check?slug=` | 建立前預檢 → `{slug, valid, available, reason, checked_live}`(2026-08-12 實測)。canonical 格式 → 本地唯一 → AI GO 架上撞名;**只回報不阻擋**,AI GO 離線時 `checked_live=false`。後端 `POST /modules` 的 409 仍是最終把關 |
 | `GET /modules?mine=true` | 我的模組;**狀態一律全回,含已下架**(下架模組的 slug 仍被佔用) |
 | `POST /modules/{mid}/restore` | 取消下架 `unpublished` → `draft`;**不會復架**,要再上架只能重新送審核准。非下架狀態回 409 |
 | `GET /modules/{mid}` | 詳情含 `versions[]`(id/version/state/metadata) |
@@ -52,8 +52,9 @@ Base:`https://developer.ai-go.app/api/v1`。權威清單:`GET /dev-docs/endpoint
 - 限制:MAX_FILES=500、50MB;路徑不得含 `\` 或 `..`;slug `^[a-z0-9][a-z0-9_-]*$`(底線正規化為 `-`)。
 - **建置產物會被丟棄**(2026-08-04):`__pycache__/`、`*.pyc`/`*.pyo`、`.DS_Store`、
   `Thumbs.db` 在 `prepare_files` 與發布出口各濾一次(事故:`.pyc` 進了版本檔案,
-  AI GO 讀取端硬解 UTF-8 失敗,租戶建 App 500)。推檔前自己先排除,否則
-  「已推送 N 檔」會與平台實際入庫數對不上。
+  AI GO 讀取端硬解 UTF-8 失敗,租戶建 App 500)。**丟棄是靜默的**——2026-08-12 實測:
+  送 28 檔(含 1 個 `.pyc`)回 200,回讀只有 27 檔。推檔前自己先排除,否則寫後回讀的
+  檔數比對會變成假失敗。
 
 ## metadata 欄位
 
@@ -73,7 +74,12 @@ data_references_schema, author, version`
   (name/description/category/access_mode/version/author)顯式送 `null` 一樣 422
   (Pydantic 預設值只在「鍵不存在」時才套用)。
 - `data_center_schema`:可存,且**存檔即驗**(`ctx_core.template_dsl`,與 AI GO
-  upsert 同一套含成環偵測;不合法 PUT metadata 直接 422)。
+  upsert 同一套含成環偵測;不合法 PUT metadata 直接擋)。
+- **metadata 的驗證失敗一律回 400,不是 422**(`api/modules.py` 的 `validate_metadata`
+  ValueError → 400;`validate_tags_allowed` 也是 400)。422 在本平台只留給**送審擋門**:
+  preflight 有 fail、送審時該版本無 deploy 紀錄、adopt 的架上 metadata 不合規。
+  2026-08-12 對正式平台實測確認(`data_center_schema: []` → `400 data_center_schema
+  必須是物件(dict),收到 list:[]`)。
 - **存 metadata 會同步 `name`/`category` 回模組本體**(2026-08-11):先前 portal
   header 與模組列表讀的是 `DevModule.name`,改名只寫進版本 metadata,兩者從不同步。
 - `required_egress`:`{slug: {label?, description?}}`——模板用到 `ctx.http.call(slug)`

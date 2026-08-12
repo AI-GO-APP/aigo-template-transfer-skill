@@ -11,8 +11,8 @@
 | 401 | 認證失效 | PAT 已撤銷/過期 → 重新發行 + `set-pat`;AIGO token → 快取自動換發,仍失敗檢查 `~/.aigo-transfer/.env` 帳密(必要時刪 `~/.aigo-transfer/token.json` 重登) |
 | 403 | 權限不足 | 分兩種:Developer 端 `read_only`(請 admin 升 editor)/ AI GO 端缺 `builder.access`(請租戶管理員開通)。**不重試、不繞路** |
 | 409 | 衝突或配額 | slug 撞架上模板或他人模組 → 換 slug 重新 init;版本線衝突 → 已有進行中版本,不要 POST /versions;自建表寫入 `unique_violation` → 該欄宣告了 unique,值重複(**這是預期行為**,見下表) |
-| 422 | 輸入不合法 | 讀 detail:metadata 欄位(tags 白名單、category、custom_objects_schema 被擋)或 preflight issues;自建表寫入 `invalid_field`/`not_null_violation` → 送出的欄位鍵與宣告對不上 |
-| 400 | 業務規則拒絕 | 讀 detail 照改,不要瞎猜 |
+| 422 | **送審擋門**(不是 metadata!) | 只有三種:preflight 有 fail(detail 帶完整 preflight)、送審時該版本無 deploy 紀錄、adopt 的架上 metadata 不合規。**PUT metadata 的驗證失敗一律是 400**——2026-08-12 實測確認 |
+| 400 | 輸入不合法或業務規則拒絕 | metadata 全家(AI GO 型別契約、category、access_mode、tags 白名單、custom_objects_schema)都在這裡;檔案 base64/檔數上限亦是。讀 detail 照改,不要瞎猜 |
 | 503 | 服務未配置 | 沙箱 action → 平台 `RUNNER_URL` 未設,記 SKIP 並向用戶標注;不是你的 code 問題 |
 
 ## 各階段症狀速查

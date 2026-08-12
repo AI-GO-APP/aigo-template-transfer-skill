@@ -9,6 +9,27 @@
 同步 Developer 平台 `origin/main`(對到 2026-08-11,24c958a);上次同步是 2026-08-01。
 **鐵律 6 的憑證歸屬反轉**,故走 minor 而非 patch。
 
+### 已對正式平台實測(2026-08-12,developer.ai-go.app)
+
+prod 的 `GET /dev-docs/endpoints` 共 89 支,已含 `slug-check`/`restore`/`ext/storage`
+——**線上就是 main 的行為,沒有落後**。逐項實打:
+
+| 主張 | 實測 |
+|---|---|
+| 沙箱 egress domain-only | 帶 `auth_type=bearer` → **400**(訊息逐字為平台的 domain-only 說明);只帶 `base_url` → **200** |
+| metadata 型別閘 | `data_center_schema: []` → **400**「必須是物件(dict),收到 list:[]」 |
+| 建置產物靜默丟棄 | 送 28 檔(含 1 個 `.pyc`)→ 200,**回讀只有 27 檔**;這正是 0.6.4 會爆的假失敗。先濾再送 27 檔 → 回讀 27,相符 |
+| `assert_deployed` 放寬 | 全新版本、**0 筆 test 事件**、preflight ok → `POST submit` **200**(舊門檻會 422)。已立即 withdraw |
+| `GET /modules/slug-check` | 200 → `{slug, valid, available, reason, checked_live}` |
+
+驗證用的 scratch module 已 `DELETE` 並回讀確認 404;白老鼠的 metadata 逐欄比對與備份一致。
+
+**實測揪出的文件錯誤:metadata 的驗證失敗是 400 不是 422。**
+`api/modules.py` 的 `validate_metadata` ValueError → 400、`validate_tags_allowed` → 400;
+422 在本平台只留給**送審擋門**(preflight 有 fail、送審時無 deploy 紀錄、adopt 的架上
+metadata 不合規)。skill 的狀態碼表從 0.6.4 起就把 metadata 標在 422 那一行,查表會走錯行
+——SKILL.md「錯誤處理」、troubleshooting 狀態碼表、devportal-api.md 三處同步更正。
+
 ### 反轉:憑證由 action 自帶,不再是「閘道注入」
 
 v0.4.0 立的「憑證不可自帶 `Authorization`,金鑰歸租戶註冊的 EgressService、由閘道注入」
