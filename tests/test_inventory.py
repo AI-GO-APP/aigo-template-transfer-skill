@@ -108,6 +108,28 @@ class TestPostInstallChecklist(unittest.TestCase):
     def test_no_inventory_no_secrets_empty(self):
         self.assertEqual(build_post_install_checklist(self.work, {}), "")
 
+    def test_egress_slug_is_what_the_tenant_must_create(self):
+        """slug 才是 ctx.http.call 解析服務的鍵。只印網域的話,租戶會建出一個
+        名字不對的服務,action 依然連不出去——而錯誤訊息說的是「service 未註冊」,
+        對不上清單裡那條「加入網域」。"""
+        common.dump_json(self.work / "inventory.json", {
+            "egress_slugs": ["openai"],
+            "egress_domains": ["api.openai.com"],
+        })
+        text = build_post_install_checklist(self.work, {})
+        self.assertIn("`openai`", text)
+        self.assertIn("完全相同的 slug", text)
+        self.assertIn("api.openai.com", text)      # 仍列出,供填 base_url 參考
+        self.assertIn("不要填在服務上", text)        # domain-only:金鑰歸安裝表單
+
+    def test_domains_only_falls_back_to_whitelist_wording(self):
+        # 沒有 ctx.http.call(例如只有前端打外部 URL)時維持舊措辭
+        common.dump_json(self.work / "inventory.json",
+                         {"egress_slugs": [], "egress_domains": ["api.line.me"]})
+        text = build_post_install_checklist(self.work, {})
+        self.assertIn("Egress 白名單", text)
+        self.assertIn("api.line.me", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,27 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.7.3
+
+安裝後設定清單只告訴租戶「加入網域」,但 `ctx.http.call` 是以 **slug** 解析服務的。
+
+`build_post_install_checklist` 只渲染 `inventory["egress_domains"]`,**從來沒印過
+`egress_slugs`**。租戶照著清單做,會建出一個名字不對的 EgressService,然後 action
+依然連不出去——而錯誤訊息說的是「egress service 'openai' 未註冊」,對不上清單裡
+那條「加入網域 api.openai.com」的指示,等於自己看自己的文件找不到答案。
+
+更糟的是網域這份清單的來源不可靠:2026-08-12 改寫白老鼠時,`api.openai.com`
+之所以還在清單裡,只是因為我在程式碼註解裡寫了那個 URL。把 URL 換成 path 常數
+(這正是鐵律 6 要的寫法)之後,`egress_domains` 可能整個是空的,清單於是**連
+一條 egress 指示都不會出現**——但模板照樣非註冊服務不可。
+
+- 有 `egress_slugs` 時改印「**以完全相同的 slug 建立服務**」,並點明 slug 不符
+  即視為未註冊;網域降為「供填 base_url 參考」
+- 明講**金鑰不要填在服務上**(ADR 0010 domain-only,閘道不注入,填了不生效),
+  金鑰歸安裝表單欄位
+- 沒有 `ctx.http.call`、只有前端打外部 URL 時維持舊的「白名單」措辭
+- 新增 2 例:slug 優先、以及只有網域時的退回措辭
+
 ## 0.7.2
 
 egress slug 放在常數裡就盤點不到,`required_egress` 因此少宣告。
