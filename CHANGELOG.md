@@ -4,6 +4,37 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.7.4
+
+線上租戶只要有 relation 欄位,S4 就過不去;帶必填圖片的模板 S8 必掛。
+兩個都不是模板的錯,但錯誤訊息都指向模板,實際轉換時很難判讀。
+
+**relation 的目標表解析不出來**
+
+AI GO 的欄位定義回的是 `target_table_id`(UUID),`table_to_dsl` 卻只讀
+`target_table`(表 key),兩者對不上 → 目標整個掉了 → DSL 驗證回
+「須指定 target_table 或 target_erp_key 兩者恰一」。來源資料明明帶了目標,
+訊息卻像是漏填,只能自己撈 `data-center/tables` 把 id 對回 key 再走
+`--from-file` 繞過。
+
+- 新增 `table_id_map()`,以全表清單建 id → key 對映;`--tables` 路徑會多撈一次
+  全表清單(relation 可能指向沒被挑進來的表,只用 details 建不夠)
+- `--from-file` 已寫好的 `target_table` 優先,不會被對映蓋掉
+- 新增 `unresolved_relations()`:仍解不出目標時**印出欄位名與原始
+  `target_table_id`**,並分別給線上/離線兩種來源的處置方式,不再讓人對著
+  驗證器的通用訊息猜
+
+**必填 image 欄位一律 422**
+
+`_DSL_SAMPLE` 對 image 給 `None`,於是 required 的 image 欄位在表 CRUD 的
+insert 一律 `not_null_violation ... 缺必填欄位`。`--expect` 只有
+`allow_fail_actions`、沒有表級對應選項,繞不過去,整支模板就卡在 S8。
+
+image 存的是**檔案路徑字串**(前端上傳後的 key),不是二進位;而 action 端沒有
+storage 模組,伺服器端根本產不出合法路徑——任何通用路徑(seed、匯入、本 e2e)
+都滿足不了必填 image。改給佔位字串讓 CRUD 跑得完,該列在
+insert→list→update→delete 的最後就被刪掉,不留髒資料。
+
 ## 0.7.3
 
 安裝後設定清單只告訴租戶「加入網域」,但 `ctx.http.call` 是以 **slug** 解析服務的。

@@ -127,6 +127,19 @@ class TestSampleRows(unittest.TestCase):
         self.assertEqual(paths.sample_for_fields(None), {})
         self.assertEqual(paths.sample_for_fields([{"no_key": 1}, "x"]), {})
 
+    def test_image_sample_is_a_path_string_not_none(self):
+        """required 的 image 欄位不能因為樣本是 None 就 422。
+
+        image 存的是檔案路徑字串,不是二進位;而 action 端沒有 storage 模組,
+        伺服器端產不出合法路徑——給 None 等於讓每個帶必填圖片的模板 S8 必掛,
+        且訊息是 not_null_violation,看起來像模板寫錯。
+        """
+        row = paths.sample_for_fields([
+            {"key": "portrait", "type": "image", "required": True},
+        ])
+        self.assertIsInstance(row["portrait"], str)
+        self.assertTrue(row["portrait"])
+
     def test_sql_sample_only_required_non_system_columns(self):
         cols = [
             {"name": "id", "type": "UUID", "nullable": False, "is_system": True},

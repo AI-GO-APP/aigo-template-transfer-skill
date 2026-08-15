@@ -112,10 +112,16 @@ def table_rows(version_id: str, table: str) -> str:
 
 # ── 測試樣本列 ────────────────────────────────────────────────
 
+# image 欄位存的是**檔案路徑字串**(前端上傳後拿到的 key),不是二進位。
+# 這裡原本給 None,結果 required 的 image 欄位一律以
+# `not_null_violation ... 缺必填欄位` 422 收場——而那不是模板的錯:
+# action 端沒有 storage 模組,伺服器端根本產不出合法路徑,任何通用路徑
+# (seed、匯入、本 e2e)都滿足不了必填 image。給一個佔位字串讓 CRUD 跑得完;
+# 這一列在 insert→list→update→delete 的最後就被刪掉,不會留下髒資料。
 _DSL_SAMPLE: dict[str, Any] = {
     "text": "e2e 測試", "number": 1, "boolean": True,
     "date": "2026-01-01", "datetime": "2026-01-01T00:00:00",
-    "json": {}, "image": None,
+    "json": {}, "image": "e2e-placeholder.png",
 }
 
 
