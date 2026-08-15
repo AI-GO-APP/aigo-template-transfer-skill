@@ -59,7 +59,26 @@ def fetch_table_detail(env: dict, key: str) -> dict:
     return dc_get(env, f"data-center/tables/{key}")
 
 
-def table_to_dsl(detail: dict) -> dict:
+def table_id_map(tables: list) -> dict:
+    """表 id(UUID) → 表 key。
+
+    AI GO 的 relation 欄位回的是 `target_table_id`(UUID),但 DSL 要的是
+    `target_table`(表 key)。沒有這層對映,**任何含 relation 的線上表都會在
+    DSL 驗證卡住**,而錯誤訊息只說「須指定 target_table 或 target_erp_key」,
+    看不出來源資料其實已經帶了目標、只是形狀不同。
+    """
+    out: dict = {}
+    for t in tables or []:
+        if not isinstance(t, dict):
+            continue
+        tid = t.get("id")
+        key = t.get("key") or t.get("physical_name")
+        if tid and key:
+            out[str(tid)] = key
+    return out
+
+
+def table_to_dsl(detail: dict, id_to_key: dict | None = None) -> dict:
     """租戶表定義 → DSL 表。欄位鍵名對映後端 DcTable/DcField 的讀取形狀。"""
     fields = []
     for f in detail.get("fields", []):
@@ -79,8 +98,12 @@ def table_to_dsl(detail: dict) -> dict:
         if f.get("options"):
             entry["options"] = list(f["options"])
         if ftype == "relation":
-            if f.get("target_table"):
-                entry["target_table"] = f["target_table"]
+            # 線上租戶回 target_table_id(UUID),離線 --from-file 可能已是 target_table
+            target = f.get("target_table")
+            if not target and f.get("target_table_id"):
+                target = (id_to_key or {}).get(str(f["target_table_id"]))
+            if target:
+                entry["target_table"] = target
             elif f.get("target_erp_key"):
                 entry["target_erp_key"] = f["target_erp_key"]
         fields.append(entry)
@@ -89,6 +112,30 @@ def table_to_dsl(detail: dict) -> dict:
         "display_name": detail.get("display_name") or detail.get("name") or detail.get("key"),
         "fields": fields,
     }
+
+
+def unresolved_relations(schema: dict, details: list) -> list:
+    """回傳仍缺目標的 relation 欄位(表.欄位, 原始 target_table_id)。
+
+    分開檢查是為了給出可行動的訊息:DSL 驗證器只會說「須指定 target_table」,
+    但真正該做的事(補 --from-file 的 target_table、或該 id 指向的表沒被選進來)
+    要看得到那個 id 才判斷得出來。
+    """
+    raw = {}
+    for d in details or []:
+        tkey = d.get("key") or d.get("physical_name")
+        for f in d.get("fields", []) or []:
+            fkey = f.get("key") or f.get("field_key") or f.get("physical_name")
+            raw[(tkey, fkey)] = f.get("target_table_id")
+    out = []
+    for t in schema.get("tables", []):
+        for f in t.get("fields", []):
+            if f.get("type") != "relation":
+                continue
+            if f.get("target_table") or f.get("target_erp_key"):
+                continue
+            out.append((f"{t['key']}.{f['key']}", raw.get((t["key"], f["key"]))))
+    return out
 
 
 def referenced_tables(template: Path) -> set[str]:
@@ -144,10 +191,24 @@ def main() -> None:
         if args.from_file:
             details = common.load_json(Path(args.from_file))
             selected = [d.get("key") or d.get("physical_name") for d in details]
+            id_to_key = table_id_map(details)
         else:
             selected = [k.strip() for k in args.tables.split(",") if k.strip()]
             details = [fetch_table_detail(env, key) for key in selected]
-        schema = {"version": 1, "tables": [table_to_dsl(d) for d in details]}
+            # relation 可能指向沒被挑進來的表,所以用全表清單建對映,不只用 details
+            id_to_key = table_id_map(fetch_tables(env))
+            id_to_key.update(table_id_map(details))
+        schema = {"version": 1, "tables": [table_to_dsl(d, id_to_key) for d in details]}
+
+        pending = unresolved_relations(schema, details)
+        if pending:
+            lines = "\n".join(
+                f"  {name}" + (f"(target_table_id={tid})" if tid else "(來源未帶目標)")
+                for name, tid in pending)
+            raise SystemExit(
+                "[FAIL] 以下 relation 欄位解析不出目標表:\n" + lines +
+                "\n  線上來源:該 id 指向的表可能沒被選進 --tables,補進去即可。"
+                "\n  --from-file 來源:請在該欄位補 target_table(表 key)或 target_erp_key。")
 
     # 交叉檢查:actions 引用的表必須被 DSL 覆蓋
     declared = {t["key"] for t in schema["tables"]}
