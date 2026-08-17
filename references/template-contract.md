@@ -10,6 +10,8 @@ package.json                 必要;private:true,恰好 5 個核心依賴,無 de
 src/main.tsx                 entry(必須 import "./App.css")
 src/App.tsx  App.css  routes.ts
 src/api.ts  src/db.ts  src/action.ts     [SDK] 三檔,照抄 canonical,勿改
+                                         (db.ts 的 remove() 對 204 有既知缺陷:檔照抄,
+                                          但 DELETE 繞過它不 import——見「正式站行為」§3)
 src/data.json                [INJ] 一律空殼 {}
 src/db.json                  [INJ] 一律空殼 {}(actions.json 不落地)
 src/components/  src/pages/(_manifest.json)
@@ -155,13 +157,19 @@ await api.post("/data-center/tables/tbl/records", {data: {col: no}});
 (`ai-go/backend/app/models/`)——後者在該租戶剛好無資料時仍然有答案。
 上表那一筆的 fixture 已修正(urfit-tech/aigo-developer-platfom#73)。
 
-## 正式站 DB Proxy 行為(沙箱曾經測不到的六件事)
+## 正式站行為(沙箱曾經測不到的六件事)
 
 2026-08-17 以 8 支已上架模板(asn-tasks/jra-tracker/mnd-board/trl-board/cu-workspace/
 calendly-scheduling/calendly-booking/ga4-analytics-hub)安裝到 demo 租戶做真前端驗收,
 抓到的正式站行為。沙箱端保真度修正見 urfit-tech/aigo-developer-platfom#119;
 AI GO 端這些是**現行正式站行為**(缺陷已記錄,修正不在本波範圍),
-**模板必須自帶下列防禦**,即使日後平台修正,防禦對正確形狀是 no-op,不必移除。
+**模板必須自帶下列防禦**;日後平台修正後,防禦對正確形狀是 no-op
+(前提見各則附註),不必移除。
+
+適用面:§1–§4 實測的是 DB Proxy(引用表 `/proxy`)面——其中 §1 另有 action 端
+(`ctx.db`)的 Python 變體實證,見 §6 末;§5–§6 是發布/runtime 面。自建表面
+(`/data-center/.../records`、`ctx.db.query_table`)除 §1 變體外未實測——
+勿逕自泛化,也勿假設安全,正式站先實打一筆再決定。
 
 ### 1. insert 回應是巢狀信封,且 `custom_data` 是 JSON「字串」
 
@@ -170,21 +178,39 @@ AI GO 端這些是**現行正式站行為**(缺陷已記錄,修正不在本波�
 兩件事都做:攤平信封 ＋ 解析字串 custom_data:
 
 ```ts
+const ENVELOPE_KEYS = new Set(["id", "created_at", "updated_at", "tenant_id", "data"]);
+
 function flatRow<T = any>(row: any): T {
-  if (!row || typeof row !== "object") return row as T;
+  if (!row || typeof row !== "object" || Array.isArray(row)) return row as T;
   const inner = (row as any).data;
-  const flat: Record<string, any> =
-    inner && typeof inner === "object" && !Array.isArray(inner)
-      ? { ...inner } : row;
-  if (inner) ["id", "created_at", "updated_at", "tenant_id"].forEach((k) => {
-    if (row[k] != null) flat[k] = row[k];
-  });
-  if (typeof flat.custom_data === "string") {
-    try { flat.custom_data = JSON.parse(flat.custom_data); } catch { /* 保留 */ }
+  // 信封判定:data 是純物件之外,頂層鍵也必須全落在信封鍵集內,
+  // 避免把「恰好有名為 data 的物件欄」的一般列誤判成信封
+  const isEnvelope =
+    inner && typeof inner === "object" && !Array.isArray(inner) &&
+    Object.keys(row).every((k) => ENVELOPE_KEYS.has(k));
+  const flat: Record<string, any> = isEnvelope ? { ...inner } : { ...row };
+  if (isEnvelope)
+    for (const k of ["id", "created_at", "updated_at", "tenant_id"])
+      if (row[k] != null) flat[k] = row[k];
+  // 只 parse 序列化容器形狀的字串;純量字串("007"、"true")不貪婪轉型
+  if (typeof flat.custom_data === "string" && /^\s*[\[{]/.test(flat.custom_data)) {
+    try { flat.custom_data = JSON.parse(flat.custom_data); }
+    catch { /* 非法 JSON:保留字串,下游 merge 前需自行檢查型別 */ }
   }
   return flat as T;
 }
 ```
+
+flatRow 的三個設計約束(改寫時不可丟):
+
+- **絕不就地改寫傳入列**,一律回傳新物件——改在原物件上會汙染 React state/
+  SWR 快取裡的那一份(參照未變不重繪、memo 失效),比原始 bug 更難查。
+- 信封判定要求頂層鍵全落在 `{id, created_at, updated_at, tenant_id, data}`,
+  一般列才不會被誤判整列吞掉。因此自建表**不要宣告名為 `data` 的欄位**;
+  真的有,「除系統欄外只有 data 欄」的列仍會誤判,需自行改判定。
+- `custom_data` 只在字串以 `{`/`[` 開頭時才 parse(信封的 `json.dumps` 產物必然
+  如此);parse 失敗保留原字串——下游對 custom_data 做 spread/merge 前自行檢查
+  `typeof`,對字串 spread 會得到逐字元索引物件。
 
 少了字串解析的實測後果:建立後的本地物件讀不到自己剛寫入的 cfg——trello/monday 風格
 模板的「看板 cfg 被下一個 merge-PATCH 整包洗掉」、jira 風格的「議題編號顯示 0」、
@@ -199,14 +225,18 @@ fallback(沿用本地物件),不要讀回應欄位。
 ### 3. DELETE 回 204 無 body
 
 正規 db.ts 的 `remove()` 對 204 呼叫 `.json()` 會拋例外(刪除其實成功了)。
-模板一律在 services/ 層自寫 fetch 發 DELETE,檢查 `resp.status === 204 || resp.ok`,
-不 import db.ts 的 remove。
+模板一律在 services/ 層自寫 fetch 發 DELETE,檢查 `resp.ok`(204 也在 ok 範圍;
+真正的教訓是 **204/空 body 不要呼叫 `.json()`**),不 import db.ts 的 remove。
 
-### 4. 伺服器端 filter 對 DATE/TIMESTAMP/UUID 欄位下字串條件 → asyncpg 500
+### 4. 伺服器端 filter 對 DATE/TIMESTAMP 欄位下字串條件 → asyncpg 500
 
 `{"column":"date_deadline","op":"gte","value":"2026-04-19"}` 在正式站直接
 `DataError: 'str' object has no attribute 'toordinal'`——連 `created_at`+完整 ISO
-也一樣。**日期/時間欄位的區間條件一律抓回前端收斂**(ISO 字串字典序=時間序),
+也一樣。錯誤出在 asyncpg 的 date encoder;UUID 欄位未觀察到同類問題
+(asyncpg 的 UUID codec 接受字串),等值查詢不必連坐改前端。
+**日期/時間欄位的區間條件一律抓回前端收斂**,收斂時把兩端 `Date.parse`
+成數值再比——直接比 ISO 字串只在同 offset、同格式、同精度時才等於時間序,
+DB 回傳的 `+00:00` 混上前端 `toISOString()` 的 `Z`+毫秒就會在邊界漏列/多列。
 不要下伺服器端條件。注意:沙箱(#119 之後)套用 filters 且日期比較可用——
 這一項沙箱比正式站寬,沙箱綠不代表正式站可行。
 
@@ -226,10 +256,6 @@ external 公開頁模板的安裝說明必須寫明這兩步,並在未核可時�
 驗收面:客戶驗證牆的「註冊」本來就開放訪客——**用合成測試帳號註冊即可全自動走完
 整條 external 流程**,不需要等 T10 核可;客戶帳號是 per-app(custom-app-auth/{slug}),
 另一支安裝要重新註冊。已在 demo 租戶以 calendly-booking 的
-預約→管理→改期→取消全流程實證(2026-08-17;該次同時抓到 P1 的 Python 變體:
+預約→管理→改期→取消全流程實證(2026-08-17;該次同時抓到 §1 的 Python 變體:
 action 端 `merge_ns(insert 回應的字串 custom_data)` 把整包預約設定洗掉,
 修法同 flatRow——`_shared` helper 一律解析字串 custom_data)。
-
-另:增量改已安裝 app 的 VFS 走 `PATCH /api/v1/builder/apps/{id}/source/files`,
-body `{files:{路徑:內容}, expected_version: <GET 回的 vfs_version>}`——樂觀鎖必填,
-不帶回 400。

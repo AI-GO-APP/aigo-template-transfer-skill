@@ -57,8 +57,8 @@
 | S9 422「尚未佈署」/ 佈署 0 次 | 該版本沒有 deploy 事件——`PUT files` 才會記,純 bump 曾經不記 | 平台 2026-08-04 起 bump 複製檔案會補記(`detail.source=bump`);線上若仍是舊版,重跑一次 `devportal.py push --slug <slug>` 即可 |
 | preflight warn:egress 未宣告 | 程式碼用了 `ctx.http.call(slug)` 但 metadata 缺 `required_egress` | 重跑 `normalize_meta.py`(會自動從盤點補宣告)→ 重新 push |
 | 沙箱寫入/測試 403 | read_only 帳號(2026-07-28 起沙箱寫入需 editor) | 請 admin 升級帳號 |
-| 建立後立刻讀不到自己寫的 custom_data(或 cfg 被下一個 PATCH 洗掉) | 正式站 insert 回應的 `data.custom_data` 是 JSON **字串**(query 回物件);flatRow 沒解析就 merge 會以空 base 覆蓋 | 讀取層過 flatRow:攤平信封＋`typeof custom_data === "string"` 時 JSON.parse(見 template-contract.md「正式站 DB Proxy 行為」§1) |
-| 正式站對日期欄位下 filter 一律 500(沙箱卻綠) | asyncpg 對 DATE/TIMESTAMP 欄位 bind 純字串拋 DataError;沙箱(#119 後)套 filters 且可比日期——此項沙箱比正式站寬 | 日期區間抓回前端收斂,不下伺服器端條件(同上 §4) |
+| 建立後立刻讀不到自己寫的 custom_data(或 cfg 被下一個 PATCH 洗掉) | 正式站 insert 回應的 `data.custom_data` 是 JSON **字串**(query 回物件);flatRow 沒解析就 merge 會以空 base 覆蓋 | 讀取層過 flatRow:攤平信封＋`typeof custom_data === "string"` 時 JSON.parse(見 template-contract.md「正式站行為」§1) |
+| 正式站對日期欄位下 filter 500(/proxy 面實測;沙箱卻綠) | asyncpg 對 DATE/TIMESTAMP 欄位 bind 純字串拋 DataError;沙箱(urfit-tech/aigo-developer-platfom#119 後)套 filters 且可比日期——此項沙箱比正式站寬 | 日期區間抓回前端收斂(`Date.parse` 成數值再比),不下伺服器端條件(同上 §4) |
 | republish 後 runtime 看起來沒更新 | bundle 快取 | 驗證 URL 帶 `?cb=<亂數>` 破快取再判定(同上 §5) |
 | external 開匿名後反而整個 404「App 不存在或尚未發布」 | `allow_anonymous_access=true` 但未經平台行政人員 T10 核可(`/anonymous-approval`,tenant admin 403) | 未核可前保持 false(至少客戶驗證牆能用);安裝說明寫明兩步核可流程(同上 §6) |
 | 對外呼叫被擋(egress 未註冊) | 租戶未以同名 slug 註冊 EgressService | **停止改 code**;引導用戶到後台 `/dashboard/settings/integrations` 註冊 slug(只需 base_url) |
