@@ -154,3 +154,75 @@ await api.post("/data-center/tables/tbl/records", {data: {col: no}});
 要確認型別就打正式環境實際讀一筆(`GET /proxy/{app_id}/{table}`),或查 AI GO 的模型層
 (`ai-go/backend/app/models/`)——後者在該租戶剛好無資料時仍然有答案。
 上表那一筆的 fixture 已修正(urfit-tech/aigo-developer-platfom#73)。
+
+## 正式站 DB Proxy 行為(沙箱曾經測不到的六件事)
+
+2026-08-17 以 8 支已上架模板(asn-tasks/jra-tracker/mnd-board/trl-board/cu-workspace/
+calendly-scheduling/calendly-booking/ga4-analytics-hub)安裝到 demo 租戶做真前端驗收,
+抓到的正式站行為。沙箱端保真度修正見 urfit-tech/aigo-developer-platfom#119;
+AI GO 端這些是**現行正式站行為**(缺陷已記錄,修正不在本波範圍),
+**模板必須自帶下列防禦**,即使日後平台修正,防禦對正確形狀是 no-op,不必移除。
+
+### 1. insert 回應是巢狀信封,且 `custom_data` 是 JSON「字串」
+
+`POST /proxy/{app}/{table}` 回 `{id, created_at, data:{...}}`;`data.custom_data`
+是 `json.dumps` 後的字串(query 路徑回物件,只有 insert 回應不同)。模板讀取層要
+兩件事都做:攤平信封 ＋ 解析字串 custom_data:
+
+```ts
+function flatRow<T = any>(row: any): T {
+  if (!row || typeof row !== "object") return row as T;
+  const inner = (row as any).data;
+  const flat: Record<string, any> =
+    inner && typeof inner === "object" && !Array.isArray(inner)
+      ? { ...inner } : row;
+  if (inner) ["id", "created_at", "updated_at", "tenant_id"].forEach((k) => {
+    if (row[k] != null) flat[k] = row[k];
+  });
+  if (typeof flat.custom_data === "string") {
+    try { flat.custom_data = JSON.parse(flat.custom_data); } catch { /* 保留 */ }
+  }
+  return flat as T;
+}
+```
+
+少了字串解析的實測後果:建立後的本地物件讀不到自己剛寫入的 cfg——trello/monday 風格
+模板的「看板 cfg 被下一個 merge-PATCH 整包洗掉」、jira 風格的「議題編號顯示 0」、
+clickup 風格的「新清單顯示全租戶狀態列」,全是同一根因。**任何「insert 完立刻用
+custom_data」或「merge-patch custom_data」的模板都必須過 flatRow 這類防禦。**
+
+### 2. 寫入 body 必須包 `{data: {...}}`;PATCH 回應只有 `{id, updated}`
+
+flat body 會 400「無有效欄位資料」。PATCH 不回列資料——依賴回傳列的程式要自備
+fallback(沿用本地物件),不要讀回應欄位。
+
+### 3. DELETE 回 204 無 body
+
+正規 db.ts 的 `remove()` 對 204 呼叫 `.json()` 會拋例外(刪除其實成功了)。
+模板一律在 services/ 層自寫 fetch 發 DELETE,檢查 `resp.status === 204 || resp.ok`,
+不 import db.ts 的 remove。
+
+### 4. 伺服器端 filter 對 DATE/TIMESTAMP/UUID 欄位下字串條件 → asyncpg 500
+
+`{"column":"date_deadline","op":"gte","value":"2026-04-19"}` 在正式站直接
+`DataError: 'str' object has no attribute 'toordinal'`——連 `created_at`+完整 ISO
+也一樣。**日期/時間欄位的區間條件一律抓回前端收斂**(ISO 字串字典序=時間序),
+不要下伺服器端條件。注意:沙箱(#119 之後)套用 filters 且日期比較可用——
+這一項沙箱比正式站寬,沙箱綠不代表正式站可行。
+
+### 5. 發布後 runtime bundle 有快取
+
+republish 後直接開 runtime URL 可能拿到舊 bundle——驗證一律帶 `?cb=<亂數>` 破快取,
+否則會把「已修好」誤判成「沒修好」。
+
+### 6. external 匿名存取需要平台行政人員核可(T10)
+
+`PATCH /builder/apps/{id}/settings {allow_anonymous_access:true}` 只是第一層;
+未經 `PATCH /builder/apps/{id}/anonymous-approval`(**僅平台行政人員**,tenant admin
+403)核可前,ext-runtime 對匿名訪客回「App 不存在或尚未發布」——**比登入牆更糟**。
+external 公開頁模板的安裝說明必須寫明這兩步,並在未核可時保持
+`allow_anonymous_access=false`(至少讓平台的客戶驗證牆能用)。
+
+另:增量改已安裝 app 的 VFS 走 `PATCH /api/v1/builder/apps/{id}/source/files`,
+body `{files:{路徑:內容}, expected_version: <GET 回的 vfs_version>}`——樂觀鎖必填,
+不帶回 400。
