@@ -4,6 +4,34 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.7.4
+
+正式站真前端驗收抓到的一批「沙箱綠、正式站壞」行為,進 references 成為 S6/S8 的對照面。
+
+2026-08-17 以 8 支已上架模板安裝 demo 租戶驗收,template-contract.md 新增
+「正式站行為」一節(六則+external 驗收法):insert 巢狀信封與字串 `custom_data`
+(附 flatRow 防禦範式)、寫入 `{data:{...}}` 包裝與 PATCH 極簡回應、DELETE 204、
+日期欄位伺服器端 filter 500、runtime bundle 快取、external 匿名的 T10 兩段核可;
+troubleshooting.md 補四列速查。沙箱端保真度修正見 urfit-tech/aigo-developer-platfom#119。
+
+合併前 review(10 項發現)的修復一併進版:
+
+- flatRow 範式三處硬化:非信封路徑不再就地改寫傳入列(原版會汙染 React state/
+  快取裡的原物件);信封判定改「頂層鍵 ⊆ 信封鍵集」,恰好有名為 `data` 的物件欄
+  不再被誤判整列吞掉;`custom_data` 只 parse `{`/`[` 開頭的字串,純量字串不貪婪
+  轉型,parse 失敗時的下游防禦有註明
+- §4 標題移除 UUID(唯一證據 `toordinal` 是 date encoder 特有,UUID codec 收字串,
+  等值查詢不必連坐改前端);「ISO 字典序=時間序」改為 `Date.parse` 比數值
+  (混 offset/精度時字典序≠時間序)
+- DELETE 檢查由 `resp.status === 204 || resp.ok` 改 `resp.ok`——204 本來就在
+  ok 範圍,原寫法暗示錯誤心智模型
+- 章節改題「正式站行為」(§5/§6 本來就不是 DB Proxy),新增「適用面」導言
+  (§1–§4 為 /proxy 面實測、§1 另有 action 端 Python 變體);「另:」的 VFS PATCH
+  段搬到 devportal-api.md 來源側,與 `vfs_version` 的 GET 成對
+- devportal-api.md「沙箱差距已於 2026-07-28 收斂」補上 2026-08-17 這一批,
+  不再與新章節各說各話;佈局節 db.ts「照抄勿改」加註 remove() 的 204 缺陷指向 §3
+- 速查表裸 `#119` 補全稱並標注 §4 適用面;SKILL.md 文件索引補新主題
+
 ## 0.7.3
 
 安裝後設定清單只告訴租戶「加入網域」,但 `ctx.http.call` 是以 **slug** 解析服務的。

@@ -423,7 +423,7 @@ submit 內建寫後回讀:確認版本狀態已轉 `submitted`。
 
 | 檔案 | 內容 |
 |------|------|
-| `references/template-contract.md` | 模板目錄佈局、meta 契約、DSL 規則、新舊 API 對照 |
+| `references/template-contract.md` | 模板目錄佈局、meta 契約、DSL 規則、新舊 API 對照、正式站行為與必帶防禦 |
 | `references/devportal-api.md` | Developer 平台 API 子集(權威:`GET /dev-docs/endpoints`) |
 | `references/pollution-signals.md` | 租戶污染訊號與人工判讀要點 |
 | `references/troubleshooting.md` | **出錯時**:症狀→成因→處置速查表 |

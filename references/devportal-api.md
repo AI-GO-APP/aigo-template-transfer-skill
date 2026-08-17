@@ -134,7 +134,9 @@ data_references_schema, author, version`
 
 沙箱**寫入**與 test 事件回報需 `editor`(read_only 只能看;storage 的 url/list 是讀取面,
 read_only 可讀不可刪)。新版 data_table SDK(自建表)沙箱已支援;沙箱與 AI GO prod 的
-已知行為差距已於 2026-07-28 收斂(PR #30)。
+已知行為差距曾於 2026-07-28 收斂一輪(PR #30),但 2026-08-17 真前端驗收又抓到一批
+(沙箱端修正 urfit-tech/aigo-developer-platfom#119)——現況與模板必帶防禦見
+template-contract.md「正式站行為」一節,**沙箱綠 ≠ 正式站可行**。
 
 > **`/ext/storage/*` 是 2026-08-02/03 才補上的**(PR #78、#88)。先前沙箱完全沒有
 > storage 面,任何帶檔案上傳的 external 模板,「選檔 → 上傳 → 寫入 → 列在紀錄」
@@ -177,4 +179,6 @@ e2e 也用 `columns` 產引用表的樣本列。
 
 - `POST /auth/login {email,password}` → JWT(需 builder.access)
 - `GET /builder/apps/{app_id_or_slug}` → 含 `vfs_state`(全量 {path: content})、`vfs_version`、`access_mode`
+- `PATCH /builder/apps/{id}/source/files` → 增量改已安裝 app 的 VFS:body
+  `{files: {路徑: 內容}, expected_version: <上面 GET 回的 vfs_version>}`——樂觀鎖必填,不帶回 400
 - `GET /data-center/tables`、`GET /data-center/tables/{key}` → 租戶自建表(key = 實體表名)
