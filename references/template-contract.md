@@ -157,18 +157,21 @@ await api.post("/data-center/tables/tbl/records", {data: {col: no}});
 (`ai-go/backend/app/models/`)——後者在該租戶剛好無資料時仍然有答案。
 上表那一筆的 fixture 已修正(urfit-tech/aigo-developer-platfom#73)。
 
-## 正式站行為(沙箱曾經測不到的六件事)
+## 正式站行為(沙箱曾經測不到的十件事)
 
-2026-08-17 以 8 支已上架模板(asn-tasks/jra-tracker/mnd-board/trl-board/cu-workspace/
-calendly-scheduling/calendly-booking/ga4-analytics-hub)安裝到 demo 租戶做真前端驗收,
-抓到的正式站行為。沙箱端保真度修正見 urfit-tech/aigo-developer-platfom#119;
-AI GO 端這些是**現行正式站行為**(缺陷已記錄,修正不在本波範圍),
+2026-08-17 兩批真前端驗收在 demo 租戶抓到的正式站行為:§1–§6 來自 8 支已上架模板
+(asn-tasks/jra-tracker/mnd-board/trl-board/cu-workspace/calendly-scheduling/
+calendly-booking/ga4-analytics-hub)的安裝驗收;§7–§10 來自 cv 系列五支
+(catalog/badge/ad-creative/social-kit/slide-studio)的安裝→發布→真前端點擊批次。
+沙箱端保真度修正見 urfit-tech/aigo-developer-platfom#119(§7/§10 的沙箱側對齊
+在 #121,送修中);AI GO 端這些是**現行正式站行為**(缺陷已記錄,修正不在本波範圍),
 **模板必須自帶下列防禦**;日後平台修正後,防禦對正確形狀是 no-op
 (前提見各則附註),不必移除。
 
 適用面:§1–§4 實測的是 DB Proxy(引用表 `/proxy`)面——其中 §1 另有 action 端
-(`ctx.db`)的 Python 變體實證,見 §6 末;§5–§6 是發布/runtime 面。自建表面
-(`/data-center/.../records`、`ctx.db.query_table`)除 §1 變體外未實測——
+(`ctx.db`)的 Python 變體實證,見 §6 末;§5–§10 是發布/runtime 面,與資料存取
+走哪一面無關。自建表面(`/data-center/.../records`、`ctx.db.query_table`)除
+§1 變體與 §7 的 `/data-center/tables/{t}/images` 上傳路徑外未實測——
 勿逕自泛化,也勿假設安全,正式站先實打一筆再決定。
 
 ### 1. insert 回應是巢狀信封,且 `custom_data` 是 JSON「字串」
@@ -268,7 +271,7 @@ action 端 `merge_ns(insert 回應的字串 custom_data)` 把整包預約設定�
 
 - **前端 hotlink 外部圖床(如 KIE 的 tempfile.aiquickdraw.com)= 破圖**;
 - **前端 fetch 外部 CDN 轉存 = Failed to fetch**——「媒體轉存搬前端」這條路
-  只在 developer 沙箱成立(沙箱預覽頁 CSP 對齊後也不再成立);
+  目前只在 developer 沙箱成立(沙箱預覽頁 CSP 對齊送修中,#121 合併後也不再成立);
 - egress 閘道那頭 `json_or_text()` 對二進位回 None,action 也代抓不了。
   **二進位在正式租戶沒有任何跨界通道。**
 
@@ -295,7 +298,7 @@ timeout **封頂在 30000ms**,服務設定寫 60000 也沒用)。前端以 `data
 
 頁面開著超過一小時後,所有 action/寫入變 401,App 自己拿不到新 token。
 模板要把 401 一律翻成「登入權杖已逾時,請重新整理頁面後再操作」;
-多步驟精靈(生成→展開→建立)要意識到中途 401 會留下半成品——能前置的寫入
+多步驟精靈(生成→展開→建立)要意識到中途 401 會留下半成品——能延後的寫入
 盡量集中在最後一步。
 
 ### 10. 原生 confirm/alert/prompt——規範禁用,且會凍結 renderer
@@ -304,4 +307,5 @@ timeout **封頂在 30000ms**,服務設定寫 60000 也沒用)。前端以 `data
 `.dialog-overlay` 體系視覺完全脫節,而且原生對話框會阻塞 renderer——
 自動化(CDP)點到刪除鈕整個分頁凍結 45 秒以上,Enter/Esc 都解不掉。
 一律改自繪確認對話框(共用 ConfirmHost + `await confirmDialog(msg)` 範式,
-掛在 ThemeProvider 的 .app-root 內)。devportal preflight 已加 warn 級掃描。
+掛在 ThemeProvider 的 .app-root 內)。devportal preflight 的 warn 級掃描
+在平台側送修中(urfit-tech/aigo-developer-platfom#121)——合併上線前以自查為準。
