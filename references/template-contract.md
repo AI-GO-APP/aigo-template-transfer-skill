@@ -259,3 +259,49 @@ external 公開頁模板的安裝說明必須寫明這兩步,並在未核可時�
 預約→管理→改期→取消全流程實證(2026-08-17;該次同時抓到 §1 的 Python 變體:
 action 端 `merge_ns(insert 回應的字串 custom_data)` 把整包預約設定洗掉,
 修法同 flatRow——`_shared` helper 一律解析字串 custom_data)。
+
+### 7. runtime CSP 的媒體白名單——外部 CDN 在正式租戶載不到
+
+正式租戶的 app-runtime CSP(2026-08-17 於 demo 租戶以 securitypolicyviolation 實錘):
+`img-src 'self' data: blob: https://*.s3.amazonaws.com https://*.s3.ap-east-2.amazonaws.com`,
+`connect-src` 同樣只有 self/平台網域/S3(外加 api.openai.com)。意思是:
+
+- **前端 hotlink 外部圖床(如 KIE 的 tempfile.aiquickdraw.com)= 破圖**;
+- **前端 fetch 外部 CDN 轉存 = Failed to fetch**——「媒體轉存搬前端」這條路
+  只在 developer 沙箱成立(沙箱預覽頁 CSP 對齊後也不再成立);
+- egress 閘道那頭 `json_or_text()` 對二進位回 None,action 也代抓不了。
+  **二進位在正式租戶沒有任何跨界通道。**
+
+生圖的正解範式(cv 系列 1.0.2 實證):action 走 openai egress 的
+`POST /v1/responses`(`background:true` + `image_generation` 工具,
+`quality:"low"`+`output_format:"jpeg"`+`output_compression:85`),前端沿用
+送單+輪詢;成品以 **base64 JSON** 回來(~200KB,低於 egress 5MB 回應上限;
+submit/poll 各約 1 秒,不撞 action/egress 的 30 秒硬上限——注意平台把 egress
+timeout **封頂在 30000ms**,服務設定寫 60000 也沒用)。前端以 `data:` URL 預覽
+(CSP 允許),挑中後 base64→blob→`/data-center/tables/{t}/images` 上傳平台 S3。
+`image_generation` 工具不接受 `reasoning.effort:"minimal"`,最低給 `low`。
+**影片**沒有等效通道(b64 過不了 5MB 上限)——設計期就不要做「生成影片後轉存」,
+只能保留外部暫存連結並引導使用者以新分頁另存(上層導覽不受頁面 CSP 限制)。
+
+### 8. 發布後 per-app runner 冷啟動 503
+
+發布完成不等於 runner 就緒:首批 action 呼叫回 503「app runner 暫時不可用」,
+持續 30 秒到數分鐘。此時 action **尚未執行**,重試安全(實測連打不會重複建資料)。
+模板的 action 包裝層應內建退避重試(如 5s/10s/15s 三次)再放棄,並把放棄後的
+文案寫成「App 服務正在啟動(發布後第一次使用約需一分鐘),請稍候再試」。
+驗收流程面:publish 後先用 API 打一發輕量 action 催醒 runner 再開始前端實測。
+
+### 9. `__APP_TOKEN__` 隨平台 JWT 一小時失效
+
+頁面開著超過一小時後,所有 action/寫入變 401,App 自己拿不到新 token。
+模板要把 401 一律翻成「登入權杖已逾時,請重新整理頁面後再操作」;
+多步驟精靈(生成→展開→建立)要意識到中途 401 會留下半成品——能前置的寫入
+盡量集中在最後一步。
+
+### 10. 原生 confirm/alert/prompt——規範禁用,且會凍結 renderer
+
+`window.confirm()` 在正式租戶「功能上」可用(原生對話框會跳),但與 App 內
+`.dialog-overlay` 體系視覺完全脫節,而且原生對話框會阻塞 renderer——
+自動化(CDP)點到刪除鈕整個分頁凍結 45 秒以上,Enter/Esc 都解不掉。
+一律改自繪確認對話框(共用 ConfirmHost + `await confirmDialog(msg)` 範式,
+掛在 ThemeProvider 的 .app-root 內)。devportal preflight 已加 warn 級掃描。

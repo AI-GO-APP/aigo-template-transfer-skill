@@ -70,3 +70,13 @@
 1. 完整讀出 API 回傳的 error message(原文,不要摘要後腦補)。
 2. 對 Developer API 疑義:`GET /api/v1/dev-docs/endpoints` 自省權威清單。
 3. 仍不明 → 把原始訊息與重現步驟轉給用戶,不要試錯式亂改。
+
+## 正式租戶 runtime 面(2026-08-17 cv 五支批次驗收新增)
+
+| 症狀 | 根因 | 修法 |
+|---|---|---|
+| AI 生成的候選圖全部破圖;挑圖時 Failed to fetch | 租戶 runtime CSP 的 img-src/connect-src 只允許 self/data:/blob:/平台 S3,外部圖床載不到;egress 又搬不動二進位 | 生圖改走 openai egress `POST /v1/responses`(background+image_generation)以 base64 回傳,前端 data URL 預覽、blob 上傳平台 S3(contract §7) |
+| 發布後第一批操作全部轉圈失敗,toast「app runner 暫時不可用」 | per-app runner 冷啟動(30 秒~數分鐘),action 未執行 | action 包裝層退避重試三次;驗收前先用 API 催醒 runner(contract §8) |
+| 開著超過一小時後所有寫入靜默失敗或報 Action Error (401) | 平台 JWT 一小時到期,`__APP_TOKEN__` 跟著失效 | 401 翻成「請重新整理頁面」;精靈類流程把寫入集中在最後一步(contract §9) |
+| 自動化測試點到刪除鈕整個分頁凍結 45 秒 | `window.confirm()` 原生對話框阻塞 renderer | 改自繪 ConfirmHost/confirmDialog;preflight 已有 warn(contract §10) |
+| proxy 讀取翻頁偶發重複列/漏列,無任何錯誤 | offset 分頁未帶唯一鍵排序,伺服器預設 created_at DESC 在時間戳重複時不穩定 | `queryAdvanced` 一律帶 `order_by:[{column:"id",direction:"asc"}]` |
