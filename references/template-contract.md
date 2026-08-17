@@ -223,6 +223,13 @@ republish 後直接開 runtime URL 可能拿到舊 bundle——驗證一律帶 `
 external 公開頁模板的安裝說明必須寫明這兩步,並在未核可時保持
 `allow_anonymous_access=false`(至少讓平台的客戶驗證牆能用)。
 
+驗收面:客戶驗證牆的「註冊」本來就開放訪客——**用合成測試帳號註冊即可全自動走完
+整條 external 流程**,不需要等 T10 核可;客戶帳號是 per-app(custom-app-auth/{slug}),
+另一支安裝要重新註冊。已在 demo 租戶以 calendly-booking 的
+預約→管理→改期→取消全流程實證(2026-08-17;該次同時抓到 P1 的 Python 變體:
+action 端 `merge_ns(insert 回應的字串 custom_data)` 把整包預約設定洗掉,
+修法同 flatRow——`_shared` helper 一律解析字串 custom_data)。
+
 另:增量改已安裝 app 的 VFS 走 `PATCH /api/v1/builder/apps/{id}/source/files`,
 body `{files:{路徑:內容}, expected_version: <GET 回的 vfs_version>}`——樂觀鎖必填,
 不帶回 400。
