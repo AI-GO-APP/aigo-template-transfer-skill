@@ -41,6 +41,7 @@
 | S7 tags 422 | tags 不在平台白名單 | `GET /refs/tags` 取合法值 |
 | S7 寫後回讀不符 | 平台改寫/丟棄欄位 | 人工比對送出與回讀內容;確認平台版本行為後回報 |
 | S7「引用宣告未經驗證」WARN | 平台部署沒有 `/refs/available-tables` | 非錯誤:該端點不是所有部署都有(權威清單 `GET /dev-docs/endpoints`)。宣告正確性改由 S8 引用表週期實打確認 |
+| S8 query 步全數 400「filters 必須是陣列」 | 平台已對 `/query` 的 `filters` 嚴格驗型別,舊寫法 `{"filters": {}}` 被拒(2026-08-23 實測;0.7.6 前的 e2e script 即中招) | 升級 skill(0.7.6 起 e2e 改送 `[]`);自打 API 一律送陣列 `[{column, op, value}, ...]`,空條件用 `[]`——新舊平台皆相容 |
 | S8 引用表**全部** fail | 平台部署沒有 `/refs/tables/{t}/columns`(非模板宣告有誤) | 0.6.1 起自動改走 seed 週期;仍全 fail 才是宣告問題。先自行打 `GET /sandbox/v/{vid}/proxy/{vid}/{table}` 確認:200 = 表沒問題 |
 | S8 引用表 WARN「seed 前的 list 失敗」 | 該表的 proxy list 回非 200,無法辨識自己 seed 的列 | 護欄擋住「刪光整張表」而已,不是模板問題。沙箱可能留有 1 列 seed 資料,跑 `tables-count` 確認並自行清 |
 | S8 引用表 WARN「seed HTTP 5xx」 | 平台產樣本列時出錯(實測 `hr_employees`、`hr_payroll_runs`) | 非模板問題:該表已用 list+query 確認可解析,但**寫入路徑未驗**。摘報時要帶到。根因已查明並送修:種子資料的固定 id 跨版本相同、撞沙箱主鍵(urfit-tech/aigo-developer-platfom#63) |
