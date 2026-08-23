@@ -185,7 +185,7 @@ def main() -> None:
             return
         steps.append("list")
         if query_path:
-            status, _ = api(env, "POST", query_path, body={"filters": {}})
+            status, _ = api(env, "POST", query_path, body={"filters": []})
             if status != 200:
                 run_phase(report, label, "fail", f"query HTTP {status}")
                 hard_fail = True
@@ -236,7 +236,7 @@ def main() -> None:
             hard_fail = True
             return
         status, _ = api(env, "POST", paths.proxy_query(vid, tname, access_mode),
-                        body={"filters": {}})
+                        body={"filters": []})
         if status != 200:
             run_phase(report, label, "fail", f"{why};query 失敗(HTTP {status})")
             hard_fail = True
@@ -291,7 +291,7 @@ def main() -> None:
         steps.append("list")
 
         status, _ = api(env, "POST", paths.proxy_query(vid, tname, access_mode),
-                        body={"filters": {}})
+                        body={"filters": []})
         if status != 200:
             run_phase(report, label, "fail", f"query HTTP {status}")
             hard_fail = True
