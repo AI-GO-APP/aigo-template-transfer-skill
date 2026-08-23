@@ -4,6 +4,34 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.7.5
+
+正式租戶 runtime 契約補遺:cv 系列五支(catalog/badge/ad-creative/social-kit/
+slide-studio)2026-08-17 安裝→發布→真前端點擊批次驗收抓到的四類行為,
+進 template-contract.md「正式站行為」§7–§10:
+
+- §7 runtime CSP 媒體白名單:外部 CDN hotlink 與前端轉存皆死路,egress 對二進位
+  回 None——二進位在正式租戶沒有跨界通道。生圖唯一可行範式 = openai egress
+  `POST /v1/responses`(background + image_generation)以 base64 JSON 過閘
+  (egress timeout 封頂 30s、回應 5MB 上限),前端 data URL 預覽→blob 上傳平台 S3;
+  影片無等效通道,設計期即須迴避
+- §8 發布後 per-app runner 冷啟動 503:action 未執行、重試安全;退避重試範式
+  與驗收前催醒手順
+- §9 `__APP_TOKEN__` 隨平台 JWT 一小時失效:401 一律翻成「請重新整理」;
+  精靈流程把能延後的寫入集中在最後一步
+- §10 原生 confirm/alert/prompt 禁用:阻塞 renderer(CDP 實測凍結 45 秒+);
+  自繪 ConfirmHost 範式
+
+troubleshooting.md 症狀速查表補五列(含 offset 分頁排序必附唯一鍵決勝的一列)。
+
+合併前 review(7 項發現)的修復一併進版:「正式站行為」章題與適用面導言隨
+§7–§10 擴充(§5–§10 併為發布/runtime 面;自建表面補記 §7 已實測的 images
+上傳路徑);§9「能前置」誤植改「能延後」;狀態碼表 503 補冷啟動語義;
+offset 分頁修法改「保留原排序＋附加 id 決勝鍵」(原寫法會把最新在前變成
+UUID 序);§7/§10 的沙箱 CSP 對齊與 preflight warn 掃描改註明平台側送修中
+(urfit-tech/aigo-developer-platfom#121,尚未合併);五列速查併入主表
+(不再排在「查不到怎麼辦」之後)。
+
 ## 0.7.4
 
 正式站真前端驗收抓到的一批「沙箱綠、正式站壞」行為,進 references 成為 S6/S8 的對照面。

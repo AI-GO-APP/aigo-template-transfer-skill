@@ -13,7 +13,7 @@
 | 409 | 衝突或配額 | slug 撞架上模板或他人模組 → 換 slug 重新 init;版本線衝突 → 已有進行中版本,不要 POST /versions;自建表寫入 `unique_violation` → 該欄宣告了 unique,值重複(**這是預期行為**,見下表) |
 | 422 | **送審擋門**(不是 metadata!) | 只有三種:preflight 有 fail(detail 帶完整 preflight)、送審時該版本無 deploy 紀錄、adopt 的架上 metadata 不合規。**PUT metadata 的驗證失敗一律是 400**——2026-08-12 實測確認 |
 | 400 | 輸入不合法或業務規則拒絕 | metadata 全家(AI GO 型別契約、category、access_mode、tags 白名單、custom_objects_schema)都在這裡;檔案 base64/檔數上限亦是。讀 detail 照改,不要瞎猜 |
-| 503 | 服務未配置 | 沙箱 action → 平台 `RUNNER_URL` 未設,記 SKIP 並向用戶標注;不是你的 code 問題 |
+| 503 | 服務未配置,或 runner 冷啟動 | 沙箱 action → 平台 `RUNNER_URL` 未設,記 SKIP 並向用戶標注;不是你的 code 問題。正式租戶發布後首批 action → per-app runner 冷啟動,action 未執行、退避重試安全(見下表與 contract §8) |
 
 ## 各階段症狀速查
 
@@ -64,19 +64,14 @@
 | 對外呼叫被擋(egress 未註冊) | 租戶未以同名 slug 註冊 EgressService | **停止改 code**;引導用戶到後台 `/dashboard/settings/integrations` 註冊 slug(只需 base_url) |
 | 對外呼叫 401,但 EgressService 明明填了金鑰 | ADR 0010 domain-only:閘道**不再注入** service 上的憑證,`auth_type`/`auth_config` runtime 一律忽略。舊模板靠注入的寫法沙箱測得過、上線就 401 | 改成自帶:金鑰進 `setup_schema`,action `ctx.secrets.get(...)` 後組 `headers={"Authorization": ...}` 傳給 `ctx.http.call`(回 Phase 3 補裁決) |
 | action 對外連線 timeout(~20s) | action 用 raw httpx/requests 直連——runner 是 default-deny egress | 改寫為 `ctx.http.call("<slug>", "<path>")`(回 Phase 3 補裁決);這是架構限制,重試無效 |
+| 正式租戶:AI 生成的候選圖全部破圖;挑圖時 Failed to fetch | 租戶 runtime CSP 的 img-src/connect-src 只允許 self/data:/blob:/平台 S3,外部圖床載不到;egress 又搬不動二進位 | 生圖改走 openai egress `POST /v1/responses`(background+image_generation)以 base64 回傳,前端 data URL 預覽、blob 上傳平台 S3(contract §7) |
+| 發布後第一批操作全部轉圈失敗,toast「app runner 暫時不可用」 | per-app runner 冷啟動(30 秒~數分鐘),action 未執行 | action 包裝層退避重試三次;驗收前先用 API 催醒 runner(contract §8) |
+| 開著超過一小時後所有寫入靜默失敗或報 Action Error (401) | 平台 JWT 一小時到期,`__APP_TOKEN__` 跟著失效 | 401 翻成「請重新整理頁面」;精靈類流程把能延後的寫入集中在最後一步(contract §9) |
+| 自動化測試點到刪除鈕整個分頁凍結 45 秒 | `window.confirm()` 原生對話框阻塞 renderer | 改自繪 ConfirmHost/confirmDialog(contract §10);preflight warn 掃描平台側送修中(urfit-tech/aigo-developer-platfom#121),上線前以自查為準 |
+| proxy 讀取翻頁偶發重複列/漏列,無任何錯誤 | offset 分頁的排序沒含唯一鍵,伺服器預設 created_at DESC 在時間戳重複時列序不穩定 | 排序保留原本需求、**附加 `id` 當決勝鍵**,如 `order_by:[{column:"created_at",direction:"desc"},{column:"id",direction:"asc"}]`;沒有排序需求也至少帶 `id`。不要只換成 `id asc`——那會把「最新在前」變成近乎隨機的 UUID 序 |
 
 ## 查不到怎麼辦
 
 1. 完整讀出 API 回傳的 error message(原文,不要摘要後腦補)。
 2. 對 Developer API 疑義:`GET /api/v1/dev-docs/endpoints` 自省權威清單。
 3. 仍不明 → 把原始訊息與重現步驟轉給用戶,不要試錯式亂改。
-
-## 正式租戶 runtime 面(2026-08-17 cv 五支批次驗收新增)
-
-| 症狀 | 根因 | 修法 |
-|---|---|---|
-| AI 生成的候選圖全部破圖;挑圖時 Failed to fetch | 租戶 runtime CSP 的 img-src/connect-src 只允許 self/data:/blob:/平台 S3,外部圖床載不到;egress 又搬不動二進位 | 生圖改走 openai egress `POST /v1/responses`(background+image_generation)以 base64 回傳,前端 data URL 預覽、blob 上傳平台 S3(contract §7) |
-| 發布後第一批操作全部轉圈失敗,toast「app runner 暫時不可用」 | per-app runner 冷啟動(30 秒~數分鐘),action 未執行 | action 包裝層退避重試三次;驗收前先用 API 催醒 runner(contract §8) |
-| 開著超過一小時後所有寫入靜默失敗或報 Action Error (401) | 平台 JWT 一小時到期,`__APP_TOKEN__` 跟著失效 | 401 翻成「請重新整理頁面」;精靈類流程把寫入集中在最後一步(contract §9) |
-| 自動化測試點到刪除鈕整個分頁凍結 45 秒 | `window.confirm()` 原生對話框阻塞 renderer | 改自繪 ConfirmHost/confirmDialog;preflight 已有 warn(contract §10) |
-| proxy 讀取翻頁偶發重複列/漏列,無任何錯誤 | offset 分頁未帶唯一鍵排序,伺服器預設 created_at DESC 在時間戳重複時不穩定 | `queryAdvanced` 一律帶 `order_by:[{column:"id",direction:"asc"}]` |
