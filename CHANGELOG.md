@@ -4,6 +4,17 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.7.6
+
+沙箱 proxy `/query` 修復:平台已對 `filters` 嚴格驗型別,送 `{"filters": {}}` 一律
+400「filters 必須是陣列」。`scripts/e2e_devportal.py` 三處呼叫點(crud_cycle /
+refs_readonly / seeded_cycle)統一改送 `{"filters": []}`——文件契約本來就是陣列
+(template-contract.md 新制 API 對照),`{}` 是舊平台寬鬆解析下的漏網寫法,
+`[]` 在新舊平台皆相容。2026-08-23 於 mf-pos-standard 1.0.0 送審流程實測:
+改前同一張表 seed / list 皆 200、僅 query 400;改後 22 pass / 0 fail。
+
+troubleshooting.md 症狀速查表補一列(舊版 script 或自打 API 中招時可查)。
+
 ## 0.7.5
 
 正式租戶 runtime 契約補遺:cv 系列五支(catalog/badge/ad-creative/social-kit/
