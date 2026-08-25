@@ -391,6 +391,55 @@ python scripts/devportal.py submit --slug <slug> --note "<給審核者的說明>
 
 submit 內建寫後回讀:確認版本狀態已轉 `submitted`。
 
+## Phase 10:商城展示圖(S10,不擋發版)
+
+模板在商城的卡片與詳情頁靠這組圖說話。沒有圖的模板在架上只有文字,點進去看不到畫面。
+詳細契約見 `references/marketplace-images.md`。
+
+### 常態規則
+
+1. **沒有展示圖 → 就去截**。開 developer 的「測試與佈署」預覽頁
+   (`/preview/{module_id}?v={version_id}`)實際跑起來逐頁截圖並保存。
+2. **截不出來不擋發版**。預覽起不來、沙箱沒資料、模組本身沒有可展示的畫面——
+   這些都是常見狀況。**S10 失敗一律不阻止送審或上架**,只在摘報裡點名。
+3. **有圖就不再要求**。判斷依據是平台上的實際狀態:
+   - `GET /modules/{id}/images` 回空陣列 → **每次出新版都要再嘗試一次**
+   - 已經有圖 → 這支就過了,之後出新版不必補、也不要重傳
+     (重傳只會附加,打亂順序甚至撞到 10 張上限)
+4. **組成:一張 banner + 介面截圖 01~05**(含以上,最多合計 10 張)。
+   - **banner 是序號 `00` 的那一張,也是封面**
+   - banner 怎麼生成不限定——手繪、設計稿、AI 生成、截圖拼貼都可以,
+     **唯一要求是必須有一張序號 00 的圖**
+   - 介面截圖從 `01` 起遞增,建議 16:9、寬度 ≥ 1366
+
+檔名慣例(`module_images.py` 依此解析,序號決定順序):
+
+```
+<slug>-00-<情境詞>主視覺.png     ← banner(封面)
+<slug>-01-<畫面概要>.png
+<slug>-02-<畫面概要>.png
+```
+
+### 操作
+
+```bash
+python scripts/module_images.py status --slug <slug>              # 先看有沒有圖
+python scripts/module_images.py upload --slug <slug> --dir <資料夾>  # 依序上傳
+python scripts/module_images.py verify --slug <slug> --dir <資料夾>  # 回讀驗證
+```
+
+`upload` 內建上傳前檢查(banner 在不在第一張、張數、大小、序號重複)、
+循序上傳與回讀驗證,已有圖時會自動略過。
+
+### 三件會咬人的事
+
+- **只對上架中的模組開放**。未上架一律 409,所以 S10 排在 S9 之後;
+  首版要等核准上架才能傳。
+- **★上傳不重試**。結果不明時重打會多出一張分身圖,所以失敗一律停下來,
+  要重來就先 `clear` 清空整支再重傳。
+- **★驗證不能用檔名**。AI GO 會把 key 換成 `templates/<slug>/<hash>.png`,
+  原始檔名不保留;要比對內容(HEAD 比大小)才驗得準。
+
 ## 驗證流程快速參照
 
 ```
@@ -400,6 +449,8 @@ submit 內建寫後回讀:確認版本狀態已轉 `submitted`。
 里程碑 / 送審前:
   audit_local 全綠 → push(寫後回讀)→ e2e full(actions + 冪等 + test 事件)
   → 摘報 e2e_report + 安裝後設定清單 → 用戶 submit
+上架之後:
+  module_images.py status → 沒圖才截圖並 upload → verify(截不出來不擋發版)
 ```
 
 ## 錯誤處理
@@ -425,5 +476,6 @@ submit 內建寫後回讀:確認版本狀態已轉 `submitted`。
 |------|------|
 | `references/template-contract.md` | 模板目錄佈局、meta 契約、DSL 規則、新舊 API 對照、正式站行為與必帶防禦 |
 | `references/devportal-api.md` | Developer 平台 API 子集(權威:`GET /dev-docs/endpoints`) |
+| `references/marketplace-images.md` | 商城展示圖:端點、硬限制、順序與驗證、預覽截圖配方 |
 | `references/pollution-signals.md` | 租戶污染訊號與人工判讀要點 |
 | `references/troubleshooting.md` | **出錯時**:症狀→成因→處置速查表 |
