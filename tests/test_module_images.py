@@ -50,6 +50,16 @@ class CollectTest(unittest.TestCase):
             # 不存在的短 slug 不該撈到任何東西
             self.assertEqual(mi.collect(d, "food-order"), [])
 
+    def test_description_may_contain_digit_pairs(self):
+        """描述段含 -兩位數-(16-9、日期)不可影響歸屬:序號緊接在 slug- 之後。"""
+        with TemporaryDirectory() as td:
+            d = Path(td)
+            _touch(d, "demo-00-banner.png")
+            _touch(d, "demo-01-16-9版面.png")
+            _touch(d, "demo-02-2024-08-報表.png")
+            got = mi.collect(d, "demo")
+            self.assertEqual([i for i, _ in got], [0, 1, 2])
+
     def test_ignores_files_without_index(self):
         with TemporaryDirectory() as td:
             d = Path(td)

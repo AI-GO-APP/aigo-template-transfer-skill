@@ -30,7 +30,7 @@ from devportal import api
 MAX_BYTES = 5 * 1024 * 1024
 MAX_IMAGES = 10
 BANNER_INDEX = 0
-NAME_RE = re.compile(r"^(?P<slug>.+)-(?P<idx>\d{2})-.*\.(png|jpg|jpeg|webp)$", re.I)
+IDX_RE = re.compile(r"^(?P<idx>\d{2})-.*\.(png|jpg|jpeg|webp)$", re.I)
 
 
 def module_id_for(env: dict, slug: str) -> str:
@@ -48,14 +48,16 @@ def collect(directory: Path, slug: str) -> list[tuple[int, Path]]:
 
     ★ slug 用最長前綴精確比對:架上有 food-order-pos / food-order-center /
     food-order-hub 這種相似組合,短的先比會把長的檔案搶走,傳到錯的模組上。
-    這裡只收「檔名去掉 slug- 之後恰好是兩位數序號」的檔案,等價於精確比對。
+    這裡只收「檔名去掉 slug- 之後緊接兩位數序號」的檔案,等價於精確比對;
+    序號之後的描述段可以含 -數字-(如 16-9、日期),不影響歸屬判定。
     """
+    prefix = slug + "-"
     found: list[tuple[int, Path]] = []
     for p in sorted(directory.iterdir()):
-        if not p.is_file():
+        if not p.is_file() or not p.name.startswith(prefix):
             continue
-        m = NAME_RE.match(p.name)
-        if not m or m.group("slug") != slug:
+        m = IDX_RE.match(p.name[len(prefix):])
+        if not m:
             continue
         found.append((int(m.group("idx")), p))
     found.sort(key=lambda x: x[0])
