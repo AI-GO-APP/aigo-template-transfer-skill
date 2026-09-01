@@ -32,7 +32,18 @@
   改法:金鑰進 `setup_schema`,action 端 `ctx.secrets.get(...)` 讀出來自組
   `headers={"Authorization": ...}` 傳給 `ctx.http.call`——閘道現在只剝 hop-by-hop,
   Authorization 原樣轉送。
-- **前端舊制 Custom Data SDK**(`submitRecord/listRecords/...`):綁 objectId 的舊資料通道。
+- **前端舊制 Custom Data SDK**(`submitRecord/listRecords/...`):綁 objectId 的舊資料通道,
+  且與下一條掛**同一道 builder.access 閘**——改寫時不要只換成新制前端 SDK,那是把舊坑換新坑。
+- **前端直呼自建表 SDK**(`queryTable/insertRow/updateRow/deleteRow/queryAdvanced/listTables`,
+  或 `db.query/insert/update/remove/count`):自建表記錄 CRUD 在 router 層掛
+  `builder.access` 閘,且以**登入者身分**驗——internal 模板安裝後,一般員工(無
+  builder.access)執行期必 403。可怕之處:開發帳號必有 builder.access,**既有驗證流程
+  永遠測不出來**(builder 核心規則 31,2026-08-31 prod 盤點 44 支中招)。
+  改法:包成 Server Action + 前端 `runAction`(`ctx.db.*` 走 app 憑證不受此閘影響),
+  action 內用 `ctx.user_permissions` 補授權閘——跳過會把 403 破口修成資料過度開放。
+  external 模板走 `/ext/data-center` 不受影響,裁決 keep 並註明即可。
+  **假修法**:改 external 不可行(access_mode 建立後不可改、受眾錯位),
+  發 builder.access 給全員是反模式。
 
 ## 逐條確認(medium)
 
@@ -56,7 +67,7 @@
   (表定義含真實 id、Data Reference 含快取資料列)。S1 抽取時自動改空殼,原件留 raw/。
 - **真實資料**:模板的 demo 資料必須是創作的(繁中、台灣在地化),不得沿用客戶資料——
   包括看似無害的名單、品項、對話紀錄。
-- **app_domain**:SaaS 表 `custom_data.app_domain` 慣例值應統一改為新模板 slug。
+- **app_domain**:預設表 `custom_data.app_domain` 慣例值應統一改為新模板 slug。
 - **兩份 meta**(`_template.json` + `_template_meta.json`):S1 移到 source_meta/,
   由 normalize_meta.py 收斂為單一合規 meta;repo 內部欄位(factory_key/template_version/
   generated_at/source)不上平台。

@@ -36,7 +36,22 @@
         "src/api.ts"
       ],
       "severity": "high",
-      "suggestion": "改用 db.ts 的 Data Center 表操作;若短期保留須確認 objectId 非硬編碼"
+      "suggestion": "改包 Server Action + runAction(前端直呼自建表存取在 internal 模板是 builder.access 破口,legacy 方法掛同一道閘,見 frontend_direct_table_sdk);若短期保留須確認 objectId 非硬編碼"
+    },
+    {
+      "id": "frontend_direct_table_sdk",
+      "description": "前端直呼自建表 SDK(queryTable/insertRow 系)——記錄 CRUD 在 router 層掛 builder.access 閘且以登入者身分驗,internal 模板安裝後一般員工執行期必 403;開發帳號必有 builder.access,既有驗證流程測不出來(builder 核心規則 31)",
+      "pattern": "\\b(?:listTables|queryTable|queryAdvanced|insertRow|updateRow|deleteRow)\\s*\\(|\\bdb\\s*\\.\\s*(?:query|count|insert|update|remove)\\s*\\(",
+      "extensions": [
+        ".ts",
+        ".tsx"
+      ],
+      "exclude_files": [
+        "src/db.ts",
+        "src/api.ts"
+      ],
+      "severity": "high",
+      "suggestion": "internal 模板必改:包成 Server Action + 前端 runAction(ctx.db.* 走 app 憑證不受影響);action 內用 ctx.user_permissions 補授權閘,否則會把 403 破口修成資料過度開放。external 模板走 /ext/data-center 不受此閘影響,可裁決 keep 並註明"
     },
     {
       "id": "secret_key_usage",
@@ -128,7 +143,7 @@
     },
     {
       "id": "app_domain_literal",
-      "description": "app_domain 字串常值(SaaS 表 custom_data.app_domain 慣例)",
+      "description": "app_domain 字串常值(預設表 custom_data.app_domain 慣例)",
       "pattern": "app_domain['\"]?\\s*[:=]\\s*['\"]([^'\"\\n]+)['\"]",
       "extensions": [
         ".ts",

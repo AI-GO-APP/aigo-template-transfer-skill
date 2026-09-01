@@ -41,7 +41,11 @@ DEVPORTAL_PAT=
 # 來源側 AI GO(抽取線上 app / 撈 Data Center 表用,帳號需 builder.access)
 # 憑證由用戶本人填寫;AI agent 不代填、不在對話中詢問密碼。
 # 有 AIGO_TOKEN 就用 token;否則用帳密自動換發並快取到同目錄的 token.json。
-AIGO_BASE_URL=https://ai-go.app
+# ★ 登入走租戶空間:AIGO_TENANT 填登入時網址列的第一段(如 urfit → https://urfit.ai-go.app)。
+#   apex(https://ai-go.app)已不能登入,會回與密碼錯同形的 401,腳本會直接擋下。
+#   UAT/本機等非標準命名空間才改填完整 AIGO_BASE_URL(優先於 AIGO_TENANT)。
+AIGO_TENANT=
+AIGO_BASE_URL=
 AIGO_EMAIL=
 AIGO_PASSWORD=
 AIGO_TOKEN=

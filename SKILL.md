@@ -84,10 +84,13 @@ python scripts/aigo_client.py whoami    # 來源側:AI GO 帳號與 builder.acce
   2. 設定頁 https://developer.ai-go.app/settings →「API Token(PAT)」→ 發行(只顯示一次)
   3. `python scripts/devportal.py set-pat` 貼入
 - `level=read_only` → 告知用戶需請平台 admin 升級為 editor,**停在這裡**,不嘗試繞過。
-- 來源側 AI GO 帳號(builder.access):請用戶**本人**在 `~/.aigo-transfer/.env` 填 `AIGO_EMAIL` /
-  `AIGO_PASSWORD`(或 `AIGO_TOKEN`)。`aigo_client.get_token()` 會走
-  「token 快取 → refresh 換發 → 帳密登入」,正常情況全程無感;
-  拋 RuntimeError 時把訊息原樣轉給用戶(內含設定指引)。
+- 來源側 AI GO 帳號(builder.access):請用戶**本人**在 `~/.aigo-transfer/.env` 填
+  `AIGO_TENANT`(登入時網址列的第一段,如 `urfit`)與 `AIGO_EMAIL` / `AIGO_PASSWORD`
+  (或 `AIGO_TOKEN`)。**登入走租戶空間 `https://{tenant}.ai-go.app`**——apex
+  (`https://ai-go.app`)已不能登入,會回與密碼錯**完全同形**的 401(平台反帳號列舉
+  設計),所以腳本直接擋 apex 並印規則;遇 401 時「密碼錯/租戶錯」兩個方向都要查,
+  不要只叫用戶查密碼。`aigo_client.get_token()` 會走「token 快取 → refresh 換發 →
+  帳密登入」,正常情況全程無感;拋 RuntimeError 時把訊息原樣轉給用戶(內含設定指引)。
   **在這裡把憑證問題解決掉**——不然它會在 S1 抽到一半才爆,錯誤混在抽取流程裡更難判讀。
   缺 `builder.access` 是權限設定問題,請租戶管理員授予,不要改 code 繞路
   (只有純 repo 來源的轉換用不到來源側憑證,可跳過這支)。

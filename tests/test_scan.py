@@ -77,6 +77,44 @@ class TestScan(unittest.TestCase):
         id2 = [x for x in self.scan() if x["rule"] == "secret_key_usage"][0]["id"]
         self.assertEqual(id1, id2)
 
+    def test_frontend_direct_table_sdk_flagged(self):
+        """internal 模板前端直呼自建表 SDK = builder.access 執行期破口(builder 規則 31):
+        一般員工必 403,而開發帳號測不出來——必須進人工裁決。"""
+        (self.template / "src" / "pages").mkdir(parents=True)
+        (self.template / "src" / "pages" / "List.tsx").write_text(
+            'import { queryTable } from "../db"\n'
+            'const rows = await queryTable("csd_tickets", { pageSize: 50 })\n',
+            encoding="utf-8")
+        findings = self.scan()
+        hits = [f for f in findings if f["rule"] == "frontend_direct_table_sdk"]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["severity"], "high")
+        self.assertIn("runAction", hits[0]["suggestion"])
+
+    def test_frontend_table_sdk_namespace_style_flagged(self):
+        (self.template / "src").mkdir(exist_ok=True)
+        (self.template / "src" / "Widget.tsx").write_text(
+            'import * as db from "./db"\nconst n = await db.count("csd_tickets")\n',
+            encoding="utf-8")
+        findings = self.scan()
+        self.assertTrue(any(f["rule"] == "frontend_direct_table_sdk" for f in findings))
+
+    def test_sdk_definition_files_excluded_from_table_sdk_rule(self):
+        (self.template / "src").mkdir(exist_ok=True)
+        (self.template / "src" / "db.ts").write_text(
+            "export async function queryTable(table: string) { return null }\n",
+            encoding="utf-8")
+        findings = self.scan()
+        self.assertFalse(any(f["rule"] == "frontend_direct_table_sdk" for f in findings))
+
+    def test_action_python_not_hit_by_table_sdk_rule(self):
+        """ctx.db.* 走 app 憑證不受 builder.access 閘影響,.py 不在此規則掃描範圍。"""
+        (self.template / "actions" / "ok.py").write_text(
+            'def execute(ctx):\n    rows = ctx.db.query_table("csd_tickets", {})\n',
+            encoding="utf-8")
+        findings = self.scan()
+        self.assertFalse(any(f["rule"] == "frontend_direct_table_sdk" for f in findings))
+
     def test_extension_filter(self):
         (self.template / "notes.md").write_text(
             'api_key = "abcdef123456789"\n', encoding="utf-8")

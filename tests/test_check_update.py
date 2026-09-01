@@ -20,6 +20,23 @@ REMOTE_CHANGELOG = """# Changelog
 - 舊版內容
 """
 
+CHANGELOG_WITH_BREAKING_MIDDLE = """# Changelog
+
+## 3.0.0
+
+- 一般改動
+
+## 2.0.0
+
+### ★ 破壞性:登入方式改了
+
+- 沒更新到本版的話登入是壞的
+
+## 1.0.0
+
+- 舊版內容(這節就算含「破壞性」也不該觸發)
+"""
+
 
 class TestVersionCompare(unittest.TestCase):
     def test_numeric_ordering(self):
@@ -92,6 +109,34 @@ class TestChangelogExcerpt(unittest.TestCase):
     def test_fetch_failure_returns_none(self):
         with mock.patch.object(cu, "_fetch", return_value=None):
             self.assertIsNone(cu._changelog_excerpt("9.9.9"))
+
+
+class TestBreakingDetection(unittest.TestCase):
+    """破壞性版本偵測(對齊 builder 1.8.0):落差內任一「比本地新」的節含「破壞性」
+    就要升級提示語——破壞性變更可能在中間版本,只看最新節會漏。"""
+
+    def test_breaking_in_middle_version_detected(self):
+        # 本地 1.0.0,落差含 2.0.0(破壞性)與 3.0.0(一般)
+        self.assertTrue(cu._has_breaking(CHANGELOG_WITH_BREAKING_MIDDLE, "1.0.0"))
+
+    def test_breaking_already_applied_not_flagged(self):
+        # 本地已在 2.0.0:那節的破壞性早已套用,不該再警告
+        self.assertFalse(cu._has_breaking(CHANGELOG_WITH_BREAKING_MIDDLE, "2.0.0"))
+
+    def test_no_breaking_anywhere(self):
+        self.assertFalse(cu._has_breaking(REMOTE_CHANGELOG, "0.1.0"))
+
+    def test_none_text_is_false(self):
+        self.assertFalse(cu._has_breaking(None, "1.0.0"))
+
+    def test_check_result_carries_breaking_flag(self):
+        with mock.patch.object(cu, "_read_local_version", return_value="1.0.0"), \
+             mock.patch.object(cu, "STATE_FILE", Path(tempfile.mkdtemp()) / "s.json"), \
+             mock.patch.object(cu, "_fetch",
+                               side_effect=["3.0.0\n", CHANGELOG_WITH_BREAKING_MIDDLE]):
+            result = cu.check(force=True)
+        self.assertEqual(result["status"], "outdated")
+        self.assertTrue(result["breaking"])
 
 
 class TestCheck(unittest.TestCase):

@@ -177,7 +177,7 @@ def main() -> None:
     parser.add_argument("--tags", help="逗號分隔(S7 會對平台 /refs/tags 驗證)")
     parser.add_argument("--setup-schema", help="setup_schema JSON 檔路徑")
     parser.add_argument("--data-references", help="data_references_schema JSON 檔路徑"
-                        "([{table_name, columns[], permissions[]}],SaaS 表 Data Reference 軌)")
+                        "([{table_name, columns[], permissions[]}],預設表 Data Reference 軌)")
     args = parser.parse_args()
 
     work = common.work_dir(args.slug)

@@ -2,12 +2,14 @@
 
     python scripts/aigo_client.py whoami    # Phase 0:來源側憑證與權限預檢
 
-憑證紀律對齊 aigo-app-builder-skill v1.1.x 的 aigo_auth.py:
+憑證與租戶空間紀律對齊 aigo-app-builder-skill 1.8.0+ 的 aigo_auth.py:
 - Agent 絕不在對話中向用戶要密碼、絕不代填;憑證一律由用戶自己寫進 .env。
+- 登入走租戶空間 https://{tenant}.ai-go.app(common.aigo_base_url 解析,apex 直接擋
+  ——apex 的 401 與密碼錯完全同形,放行只會把人送去查一個無解的密碼問題)。
 - Token 取得順序:AIGO_TOKEN 環境變數/.env > 未過期快取 > refresh_token 換發 >
   .env 帳密登入。全部失敗 → 拋 RuntimeError,訊息內含設定指引,原樣轉給用戶。
 - Token 快取在 ~/.aigo-transfer/token.json(skill 目錄外,重裝不會被清掉),
-  密碼不進指令列與 log。
+  快取綁 base_url——token 綁租戶,換租戶即整份作廢;密碼不進指令列與 log。
 """
 import argparse
 import json
@@ -23,6 +25,7 @@ CACHE_DIR = common.USER_DIR
 CACHE_FILE = common.TOKEN_CACHE_FILE
 
 SETUP_GUIDE = f"""無法取得 AI GO 憑證。請(用戶本人)在 {common.ENV_FILE} 填入:
+  AIGO_TENANT=<租戶前綴>      # 登入時網址列的第一段,如 urfit
   AIGO_EMAIL=<你的 AI GO 帳號>
   AIGO_PASSWORD=<你的密碼>
 或直接提供 AIGO_TOKEN=<JWT>。帳號需具備 builder.access 權限。
@@ -61,6 +64,15 @@ def _login(env: dict, base_url: str) -> str:
     status, payload = common.http_call(
         "POST", f"{base_url}/api/v1/auth/login",
         body={"email": email, "password": password})
+    if status == 401:
+        # 平台反帳號列舉設計:密碼錯與租戶錯的 401 完全同形(狀態碼/detail 皆不可區分),
+        # 不能只叫人查密碼——那可能是一個無解的方向。
+        raise RuntimeError(
+            f"AI GO 登入失敗(HTTP 401):{payload.get('detail', payload)}。\n"
+            f"「密碼錯」與「租戶錯」的 401 完全同形,兩個方向都要查:\n"
+            f"  1) {common.ENV_FILE} 的 AIGO_EMAIL / AIGO_PASSWORD 是否正確\n"
+            f"  2) 租戶空間是否正確(目前打:{base_url};"
+            f"AIGO_TENANT 應為登入時網址列的第一段)")
     if status != 200:
         raise RuntimeError(f"AI GO 登入失敗(HTTP {status}):{payload.get('detail', payload)}。"
                            f"請確認 .env 的 AIGO_EMAIL / AIGO_PASSWORD 正確。")
@@ -83,7 +95,7 @@ def get_token(env: dict | None = None) -> str:
     env = env or common.load_env()
     if env.get("AIGO_TOKEN"):
         return env["AIGO_TOKEN"]
-    base_url = env["AIGO_BASE_URL"].rstrip("/")
+    base_url = common.aigo_base_url(env)
     cached = _load_cache(base_url)
     if cached:
         if cached.get("expires_at", 0) > time.time():
@@ -97,7 +109,7 @@ def get_token(env: dict | None = None) -> str:
 
 def api(env: dict, method: str, path: str, body=None) -> tuple[int, dict]:
     """帶 token 打 AI GO API;401 時清快取重新取得再試一次。"""
-    base_url = env["AIGO_BASE_URL"].rstrip("/")
+    base_url = common.aigo_base_url(env)
     url = base_url + "/api/v1/" + path.lstrip("/")
     status, payload = common.http_call(method, url, body=body, token=get_token(env))
     if status == 401 and not env.get("AIGO_TOKEN"):
