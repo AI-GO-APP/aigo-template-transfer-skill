@@ -51,7 +51,19 @@ LEGACY_TOKEN_DIR = REPO_ROOT / ".aigo"
 LEGACY_TOKEN_FILE = LEGACY_TOKEN_DIR / "token.json"
 
 DEVPORTAL_DEFAULT_API = "https://developer.ai-go.app/api/v1"
-AIGO_DEFAULT_BASE = "https://ai-go.app"
+
+# 來源側 AI GO 的登入走租戶空間(builder skill 1.8.0 破壞性變更,2026-08 平台硬切):
+# {tenant}.ai-go.app 由 Host header 解出租戶,apex 推不出租戶,登入一律回
+# 與「密碼錯」**完全同形**的 401(反帳號列舉設計)。所以這裡沒有預設 base_url
+# ——沒有一個對全部租戶都成立的值;寧可當場把規則說清楚,也不讓使用者去查
+# 一個無解的「密碼錯誤」。
+AIGO_APEX_HOSTS = frozenset({"ai-go.app", "www.ai-go.app"})
+AIGO_TENANT_GUIDE = (
+    "未設定來源側 AI GO 的租戶空間。請在 {env_file} 填其一:\n"
+    "  AIGO_TENANT=<租戶前綴>     # 登入時網址列的第一段,如 urfit → https://urfit.ai-go.app\n"
+    "  AIGO_BASE_URL=<完整網址>   # 僅非標準命名空間(UAT/本機)使用,優先於 AIGO_TENANT\n"
+    "注意:apex(https://ai-go.app)已不能登入,打了會回與密碼錯同形的 401。"
+)
 
 STAGES = [
     "S0_candidate",   # 候選判定(人工閘)
@@ -189,13 +201,45 @@ def load_env() -> dict[str, str]:
                 continue
             k, v = line.split("=", 1)
             env[k.strip()] = v.strip().strip('"').strip("'")
-    for k in ("DEVPORTAL_API", "DEVPORTAL_PAT", "AIGO_BASE_URL", "AIGO_TOKEN",
-              "AIGO_EMAIL", "AIGO_PASSWORD"):
+    for k in ("DEVPORTAL_API", "DEVPORTAL_PAT", "AIGO_BASE_URL", "AIGO_TENANT",
+              "AIGO_TOKEN", "AIGO_EMAIL", "AIGO_PASSWORD"):
         if os.environ.get(k):
             env[k] = os.environ[k]
     env.setdefault("DEVPORTAL_API", DEVPORTAL_DEFAULT_API)
-    env.setdefault("AIGO_BASE_URL", AIGO_DEFAULT_BASE)
     return env
+
+
+def aigo_base_url(env: dict[str, str]) -> str:
+    """解析來源側 AI GO 的租戶空間網址,並擋掉必炸的寫法。
+
+    優先序:AIGO_BASE_URL(完整網址,給 UAT/本機等非標準命名空間)>
+    AIGO_TENANT(前綴,組成 https://{tenant}.ai-go.app)。兩者皆無、或指向 apex
+    → 拋 RuntimeError(訊息含設定指引,原樣轉給用戶)。
+
+    為什麼要在客戶端就擋:apex 的 401 與密碼錯完全同形(平台反帳號列舉設計),
+    放行等於把使用者送去查一個無解的密碼問題。
+    """
+    raw = (env.get("AIGO_BASE_URL") or "").strip().rstrip("/")
+    tenant = (env.get("AIGO_TENANT") or "").strip().lower()
+    if not raw and tenant:
+        if not all(c.isalnum() or c == "-" for c in tenant) or tenant.startswith("-"):
+            raise RuntimeError(
+                f"AIGO_TENANT 只能填租戶前綴(登入網址列的第一段,如 urfit),收到:{tenant!r}")
+        raw = f"https://{tenant}.ai-go.app"
+    if not raw:
+        raise RuntimeError(AIGO_TENANT_GUIDE.format(env_file=ENV_FILE))
+
+    host = raw.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0].lower()
+    if host in AIGO_APEX_HOSTS:
+        raise RuntimeError(
+            f"AIGO_BASE_URL 指向 apex({host}),登入必回與密碼錯同形的 401。\n"
+            + AIGO_TENANT_GUIDE.format(env_file=ENV_FILE))
+    if host.endswith(".ai-go.app"):
+        prefix = host[: -len(".ai-go.app")]
+        if "." in prefix or prefix == "www":
+            raise RuntimeError(
+                f"AIGO_BASE_URL 的租戶前綴不合法:{host}(應為單層前綴,如 urfit.ai-go.app)。")
+    return raw
 
 
 def http_call(method: str, url: str, *, body: Any = None, token: str | None = None,

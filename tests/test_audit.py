@@ -6,8 +6,8 @@ from pathlib import Path
 import helpers
 import common
 from audit_core import run_audit
-from audit_local import (audit_dsl, audit_legacy, audit_manifest, audit_secrets,
-                         audit_shape)
+from audit_local import (audit_dsl, audit_legacy, audit_manifest,
+                         audit_reserved_table_names, audit_secrets, audit_shape)
 
 
 class TestAudit(unittest.TestCase):
@@ -26,7 +26,43 @@ class TestAudit(unittest.TestCase):
         results["secrets"], _ = audit_secrets(self.template)
         results["dsl"], _ = audit_dsl(self.template, None)
         results["legacy"] = audit_legacy(self.template, self.rules["legacy"])
+        results["reserved"] = audit_reserved_table_names(self.template)
         return results
+
+    def _write_meta_with_tables(self, *keys: str) -> None:
+        meta = dict(helpers.MINIMAL_META)
+        meta["data_center_schema"] = {"version": 1, "tables": [
+            {"key": k, "display_name": k,
+             "fields": [{"key": "note", "display_name": "備註", "type": "text"}]}
+            for k in keys
+        ]}
+        (self.template / "_template_meta.json").write_text(
+            json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+    def test_reserved_table_names_blocked_per_source(self):
+        """三個來源各取一名:users(平台地板)、select(SQL 保留字)、
+        hr_employees(ERP per-tenant)——安裝當下會 409,S6 要前置攔下。"""
+        self._write_meta_with_tables("users", "select", "hr_employees", "csd_tickets")
+        failures = audit_reserved_table_names(self.template)
+        self.assertEqual(len(failures), 3, failures)
+        text = "\n".join(failures)
+        self.assertIn("users", text)
+        self.assertIn("平台保留表名", text)
+        self.assertIn("SQL 保留字", text)
+        self.assertIn("ERP", text)
+        self.assertNotIn("csd_tickets", text)
+
+    def test_reserved_check_prefers_erp_message(self):
+        """hr_payroll_slips 同時在 ERP 與地板兩份清單——訊息採 ERP(對齊平台 classify
+        優先序:對租戶而言「與系統內建表名衝突」比「平台保留」更能指向怎麼改)。"""
+        self._write_meta_with_tables("hr_payroll_slips")
+        failures = audit_reserved_table_names(self.template)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("ERP", failures[0])
+
+    def test_reserved_check_passes_clean_names(self):
+        self._write_meta_with_tables("csd_tickets", "order_notes")
+        self.assertEqual(audit_reserved_table_names(self.template), [])
 
     def test_minimal_template_passes_all(self):
         for name, failures in self.all_results().items():

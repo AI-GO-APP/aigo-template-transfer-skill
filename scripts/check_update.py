@@ -123,9 +123,10 @@ def _update_command(method: str) -> str:
     return "npx skills update aigo-template-transfer-skill"
 
 
-def _changelog_excerpt(remote_version: str) -> str | None:
-    """取遠端 CHANGELOG 中新版那一節,作為變更摘要。"""
-    text = _fetch(REMOTE_CHANGELOG_URL)
+def _changelog_excerpt(remote_version: str, text: str | None = None) -> str | None:
+    """取遠端 CHANGELOG 中新版那一節,作為變更摘要。text 可傳入避免重複抓取。"""
+    if text is None:
+        text = _fetch(REMOTE_CHANGELOG_URL)
     if not text:
         return None
     lines = text.splitlines()
@@ -142,6 +143,27 @@ def _changelog_excerpt(remote_version: str) -> str | None:
             break
         excerpt.append(ln)
     return "\n".join(excerpt[:CHANGELOG_MAX_LINES]).strip()
+
+
+def _has_breaking(text: str | None, local: str) -> bool:
+    """遠端 CHANGELOG 中「比本地新的版本節」是否含「破壞性」字樣(對齊 builder 1.8.0)。
+
+    掃整段落差而非只看最新一節:破壞性變更可能出現在中間版本,
+    只看最新節會讓晚兩版才更新的人拿不到警告。歷史節(≤ 本地版)早已套用,不掃。"""
+    if not text:
+        return False
+    version: str | None = None
+    body: list[str] = []
+    for ln in text.splitlines() + ["## _end"]:
+        stripped = ln.strip()
+        if stripped.startswith("## "):
+            if version and _is_newer(version, local) and "破壞性" in "\n".join(body):
+                return True
+            version = stripped[3:].strip()
+            body = []
+        else:
+            body.append(ln)
+    return False
 
 
 def _apply_update(method: str) -> tuple[bool, str]:
@@ -190,6 +212,7 @@ def check(force: bool = False) -> dict:
         return {"status": "current", "local": local, "remote": remote}
 
     method = _install_method()
+    changelog_text = _fetch(REMOTE_CHANGELOG_URL)
     return {
         "status": "outdated",
         "local": local,
@@ -197,7 +220,8 @@ def check(force: bool = False) -> dict:
         "skill_dir": str(SKILL_DIR),
         "install_method": method,
         "update_command": _update_command(method),
-        "changelog": _changelog_excerpt(remote),
+        "changelog": _changelog_excerpt(remote, changelog_text),
+        "breaking": _has_breaking(changelog_text, local),
     }
 
 
@@ -224,7 +248,11 @@ def main() -> int:
     if result["status"] != "outdated":
         return 0
 
-    print(f"[aigo-template-transfer] 有新版可用:本地 {result['local']} → 遠端 {result['remote']}")
+    if result.get("breaking"):
+        print(f"[aigo-template-transfer] ★ 必須更新:本地 {result['local']} → 遠端 {result['remote']}"
+              f"(落差內含破壞性變更——不更新的話,部分功能已經是壞的)")
+    else:
+        print(f"[aigo-template-transfer] 有新版可用:本地 {result['local']} → 遠端 {result['remote']}")
     if result.get("changelog"):
         print(f"\n變更摘要:\n{result['changelog']}\n")
     if "applied" in result:

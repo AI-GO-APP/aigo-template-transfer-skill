@@ -4,6 +4,76 @@
 **每次改動 Skill 內容(SKILL.md / references / config / scripts)都要同步更新 `VERSION`**,
 否則使用者端的更新檢查(`scripts/check_update.py`)不會提示。
 
+## 0.9.0
+
+對齊 aigo-app-builder-skill v1.16.0(前次基準 v1.2.0,落差 14 版逐版盤點;
+egress domain-only 與憑證位置早在 0.6.2/0.7.0 覆蓋,本版補其餘相關項)。
+
+### ★ 破壞性:來源側 AI GO 登入改走租戶空間(builder 1.8.0)
+
+**沒更新到本版的話,所有來源側路徑(whoami / --list-apps / --from-app /
+confirm-source / dc_extract)已經是壞的。**平台 2026-08 硬切 workspace 子網域後,
+租戶由 Host header 解出,apex(`https://ai-go.app`)登入一律回與「密碼錯」
+**完全同形**的 401(反帳號列舉設計)——症狀會偽裝成憑證問題,往密碼方向查不到底。
+
+**更新後要做的事**:用戶本人在 `~/.aigo-transfer/.env` 加一行
+`AIGO_TENANT=<租戶前綴>`(登入時網址列的第一段,如 `urfit`),
+然後 `python scripts/aigo_client.py whoami` 確認。UAT/本機等非標準命名空間
+改填完整 `AIGO_BASE_URL`(優先於 `AIGO_TENANT`)。
+
+- `common.aigo_base_url()`:AIGO_BASE_URL > AIGO_TENANT 解析;**移除 apex 預設值**
+  (沒有一個對全部租戶都成立的值),apex/www/多層前綴直接擋下並印規則
+- 登入 401 的訊息改列「密碼錯/租戶錯」兩種方向,不再只叫人查密碼
+- token 快取本就綁 base_url,換租戶自動作廢,此處不用動
+- `devportal.py setup` 的 `.env` 範本同步改寫
+- 只走純 repo 來源的轉換用不到來源側憑證,不受影響
+
+### 前端直呼自建表 SDK 掃描(builder 1.16.0 規則 31)
+
+internal app 的自建表記錄 CRUD 在 router 層掛 `builder.access` 閘且以**登入者身分**驗
+——internal 模板安裝後一般員工執行期必 403,而開發帳號必有該權限,**既有驗證流程
+永遠測不出來**(2026-08-31 prod 盤點 44 支中招)。轉出這種模板等於出貨未爆彈:
+
+- 新掃描規則 `frontend_direct_table_sdk`(high):`.ts/.tsx` 直呼
+  `queryTable/insertRow/updateRow/deleteRow/queryAdvanced/listTables` 或
+  `db.query/count/insert/update/remove`(排除 SDK 定義檔本身)。
+  internal 必改(包 Server Action + `runAction`,action 內 `ctx.user_permissions`
+  補授權閘);external 走 `/ext/data-center` 不受影響,可裁決 keep
+- **修正 `legacy_frontend_records` 的錯誤建議**:原「改用 db.ts 的 Data Center 表操作」
+  正是把人指向這個破口(legacy 前端方法掛同一道閘),改為包 action
+- pollution-signals.md 補完整訊號說明(含假修法排除:改 external 不可行、
+  發 builder.access 給全員是反模式)
+
+### 保留表名前置攔截(builder 1.11.0)
+
+自建表 key 即實體表名,撞平台保留母體(SQL 保留字 ∪ ERP per-tenant 表 ∪ 平台地板表
+`users`/`tenants` 等 76 張)安裝當下建表 409,且地板表撞名不吃「待允許一鍵補救」管道:
+
+- S6 新增閘「保留表名前置攔截」,吃 `config/reserved_table_names.json` 快照
+  (2026-09-01 自 ai-go backend `identifiers.reserved_physical_table_names()` 三來源推導;
+  訊息分類順序對齊平台 classify:ERP > SQL > 地板)
+- 快照只是前置攔截:漏攔由安裝當下 409 兜底,誤攔以平台為準並重生快照。重生指令:
+  在 ai-go/backend venv 執行
+  `python -c "from app.core.app_scope_routes import platform_floor_tables; from app.utils.schema_home import per_tenant_tables; from app.services.data_center.identifiers import _RESERVED; ..."`
+  (取三集合排序寫回 JSON,見 config 檔 `_comment`)
+
+### 更新檢查:破壞性版本偵測(builder 1.8.0)
+
+`check_update.py` 掃遠端 CHANGELOG「比本地新的所有版本節」,任一節含「破壞性」
+→ 提示語升級為「★ 必須更新」並說明後果;`--json` 多 `breaking` 欄位。
+掃整段落差而非只看最新節——破壞性可能在中間版本,晚兩版才更新的人也要拿到警告。
+
+### 其他對齊
+
+- 契約補記(builder 1.11.0):VFS 寫入前正規化(非法路徑 400、`Actions/`→`actions/`
+  折疊)、`actions/requirements.txt` per-app wheelhouse(≤20 行/≤80 MiB/aarch64
+  only-binary,有 pin 時 draft runner 冷啟 ~60s)
+- 稱謂對齊(builder 1.15.0):「SaaS 表」停用,改官方分類「預設表」
+  (歷史 CHANGELOG 不回改;API 技術識別名如 `target_erp_key` 保留原樣)
+- troubleshooting 速查表補五列(401 同形雙向查、租戶空間未設定、建表 409、
+  VFS 正規化、internal 一般員工 403)
+- `aigo_client.py` 檔頭的對齊基準註記從 v1.1.x 更新為 1.8.0+
+
 ## 0.8.0
 
 新增 **S10:商城展示圖**——模板在商城的卡片與詳情頁靠 banner + 介面截圖說話,

@@ -9,6 +9,7 @@
   manifest     actions/manifest.json ↔ actions/*.py 一一對應、flat dict 格式
   secrets      ctx.secrets.get 的 key ⊆ setup_schema(反向不覆蓋則 warn)
   dsl          data_center_schema 驗證(本地鏡射或權威 parser)
+  reserved     自建表名撞平台保留母體(SQL 保留字/ERP 表/平台地板表 → 安裝當下 409)
   legacy       禁舊制 CustomObject(meta 欄位 + *_object API)
   meta 閘      _template_meta.json 已經用戶確認(transfer_cli.py confirm-meta)且未再變更
   limits       檔數/單檔大小(AI GO 200 檔/1MB)
@@ -154,6 +155,43 @@ def audit_dsl(template: Path, ai_go_backend: str | None) -> tuple[list[str], str
     return validate_data_center_schema(schema), "local"
 
 
+def audit_reserved_table_names(template: Path) -> list[str]:
+    """自建表名前置攔截:data_center_schema 的表 key 即實體表名,撞到平台保留母體
+    (AI GO identifiers.reserved_physical_table_names:SQL 保留字 ∪ ERP per-tenant 表
+    ∪ 平台地板表)安裝當下建表直接 409——而地板表撞名連「待允許一鍵補救」都不適用。
+
+    本檢查吃 config/reserved_table_names.json 快照;快照只會落後不會超前,
+    漏攔的由安裝當下 409 兜底,誤攔(平台移除某名)以平台為準並重生快照。
+    訊息分類順序對齊平台 classify(ERP > SQL > 地板)。"""
+    meta_path = template / "_template_meta.json"
+    if not meta_path.exists():
+        return []
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []  # meta 壞掉由 dsl/meta 閘負責報,這裡不重複
+    tables = (meta.get("data_center_schema") or {}).get("tables") or []
+    if not isinstance(tables, list):
+        return []
+    cfg = common.load_config("reserved_table_names.json")
+    sources = [
+        (set(cfg["erp_per_tenant"]), "與系統內建(ERP)表名衝突"),
+        (set(cfg["sql_reserved"]), "為 SQL 保留字"),
+        (set(cfg["platform_floor"]), "與平台保留表名衝突"),
+    ]
+    failures: list[str] = []
+    for table in tables:
+        key = table.get("key") if isinstance(table, dict) else None
+        if not isinstance(key, str):
+            continue
+        for names, reason in sources:
+            if key in names:
+                failures.append(f"自建表 key '{key}' {reason}——安裝當下建表會 409,請改名"
+                                f"(表 key 即實體表名,建後不可變)")
+                break
+    return failures
+
+
 def audit_legacy(template: Path, rule: dict) -> list[str]:
     failures: list[str] = []
     meta_path = template / "_template_meta.json"
@@ -244,6 +282,7 @@ def main() -> None:
     results["Secrets 覆蓋"] = secret_fails
     dsl_errors, dsl_by = audit_dsl(template, args.ai_go_backend)
     results[f"DSL 驗證({dsl_by})"] = dsl_errors
+    results["保留表名前置攔截"] = audit_reserved_table_names(template)
     results["舊制禁用"] = audit_legacy(template, rules["legacy"])
     limit_fails, limit_warns = audit_limits_and_paths(template, rules["limits"])
     results["檔數/路徑上限"] = limit_fails

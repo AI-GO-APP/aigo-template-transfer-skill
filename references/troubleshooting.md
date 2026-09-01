@@ -8,7 +8,7 @@
 
 | 狀態碼 | 語義 | 典型處置 |
 |---|---|---|
-| 401 | 認證失效 | PAT 已撤銷/過期 → 重新發行 + `set-pat`;AIGO token → 快取自動換發,仍失敗檢查 `~/.aigo-transfer/.env` 帳密(必要時刪 `~/.aigo-transfer/token.json` 重登) |
+| 401 | 認證失效 | PAT 已撤銷/過期 → 重新發行 + `set-pat`;AIGO token → 快取自動換發,仍失敗檢查 `~/.aigo-transfer/.env` 帳密(必要時刪 `~/.aigo-transfer/token.json` 重登)。**AI GO 登入 401 是雙向的**:「帳號或密碼錯誤」與「打錯租戶空間」完全同形(平台反帳號列舉設計)——密碼確定沒錯就查 `AIGO_TENANT`(登入時網址列的第一段),見下表 |
 | 403 | 權限不足 | 分兩種:Developer 端 `read_only`(請 admin 升 editor)/ AI GO 端缺 `builder.access`(請租戶管理員開通)。**不重試、不繞路** |
 | 409 | 衝突或配額 | slug 撞架上模板或他人模組 → 換 slug 重新 init;版本線衝突 → 已有進行中版本,不要 POST /versions;自建表寫入 `unique_violation` → 該欄宣告了 unique,值重複(**這是預期行為**,見下表) |
 | 422 | **送審擋門**(不是 metadata!) | 只有三種:preflight 有 fail(detail 帶完整 preflight)、送審時該版本無 deploy 紀錄、adopt 的架上 metadata 不合規。**PUT metadata 的驗證失敗一律是 400**——2026-08-12 實測確認 |
@@ -19,6 +19,11 @@
 
 | 症狀 | 成因 | 處置 |
 |---|---|---|
+| AI GO 登入 401「帳號或密碼錯誤」但密碼確定沒錯 | 打到 apex(`https://ai-go.app`)或錯租戶——2026-08 平台硬切租戶空間後,apex 推不出租戶,401 與密碼錯**完全同形**,往密碼方向查一定查不到底 | `.env` 填 `AIGO_TENANT=<租戶前綴>`(登入時網址列的第一段,如 `urfit`);0.9.0 起腳本會直接擋 apex 並印規則。UAT/本機改填完整 `AIGO_BASE_URL` |
+| 腳本啟動即「未設定來源側 AI GO 的租戶空間」 | 0.9.0 起移除 apex 預設值(沒有一個對全部租戶都成立的值) | 由用戶在 `.env` 補 `AIGO_TENANT=`;只走純 repo 來源的轉換用不到來源側,不受影響 |
+| 安裝/沙箱建自建表 409(表名衝突) | 表 key 撞平台保留母體:SQL 保留字/ERP 表名/平台地板表(`users`、`tenants` 等 76 張)——地板表撞名連「待允許一鍵補救」都不適用 | S6 已用 `config/reserved_table_names.json` 快照前置攔截;中招就改表 key(建後不可變)。快照漏攔由安裝當下 409 兜底 |
+| push 後平台上的檔案路徑跟送出的不同(如 `Actions/` 變 `actions/`) | 平台 VFS 寫入前正規化:非法路徑 400、`Actions/` 大小寫折疊(2026-09 對齊 builder 1.11.0) | 非錯誤;寫後回讀比對時以平台回讀為準,來源側路徑統一小寫 `actions/` |
+| internal 模板上架安裝後,一般員工操作自建表功能一律 403(開發者自測正常) | 前端直呼自建表 SDK 以**登入者身分**過 `builder.access` 閘;開發帳號必有該權限,測不出來(builder 規則 31) | S2 掃描規則 `frontend_direct_table_sdk` 已攔;改包 Server Action + `runAction`,action 內用 `ctx.user_permissions` 補授權閘 |
 | 更新 skill 後憑證/工作區不見了 | 0.6.1 以前把 `.env`、`.aigo/`、`work/` 放在 skill 目錄內,複製式安裝(`npx skills add`)更新會 `rm -rf` 整個目錄重鋪 | 0.6.2 起已搬到 `~/.aigo-transfer/`,不會再發生。已經被清掉的只能重設 PAT 與重跑轉換;git 安裝從未受影響 |
 | 啟動時出現「[!] … 新舊兩份都存在」 | 舊資料搬遷時新位置已有同名檔案,腳本一律不覆蓋 | 實際生效的是 `~/.aigo-transfer/` 那份。比對後自行刪掉不要的舊檔——留在 skill 目錄裡的那份下次更新會被清掉 |
 | 啟動時出現「[!] … 搬移失敗」 | 家目錄唯讀、跨磁碟或權限問題 | 舊路徑仍可用(有後備讀取),但仍在被清掉的風險內。手動把檔案搬到 `~/.aigo-transfer/`,或設 `AIGO_TRANSFER_HOME` 指到可寫位置 |

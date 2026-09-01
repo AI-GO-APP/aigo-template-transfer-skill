@@ -25,6 +25,17 @@ actions/seed_demo_data.py    業務型模板慣例(冪等、繁中在地化、ti
 核心依賴(= bare import 白名單):`react, react-dom, react-router-dom, lucide-react, react-hot-toast`。
 VFS 上限(AI GO 側):200 檔、單檔 1MB。
 
+VFS 寫入前正規化(2026-09 對齊 builder 1.11.0):非法路徑 400、`Actions/` → `actions/`
+大小寫折疊——來源側路徑統一小寫,寫後回讀比對以平台回讀為準。
+
+`actions/requirements.txt`(選用):action 可宣告 pip 依賴(`name==version`、≤20 行、
+≤80 MiB、aarch64 only-binary);解析只在試跑/發布,有 pin 時試跑走 draft runner 冷啟
+約 60 秒。來源 app 帶這個檔時照搬並在 S8 留意冷啟逾時,改壞它會讓 action 全逾時。
+
+**internal 模板的前端不得直呼自建表 SDK**(`queryTable/insertRow` 系):記錄 CRUD 在
+router 層掛 `builder.access` 閘且以登入者身分驗,一般員工執行期必 403、開發帳號測不出來
+(builder 核心規則 31)。一律包 Server Action + `runAction`;詳見 pollution-signals.md。
+
 ## _template_meta.json
 
 必填(audit 硬閘):`slug, name, description, category, version`
@@ -74,6 +85,10 @@ required_egress, data_center_schema, data_references_schema, author`
   target_table 只能指向本模板宣告的表;relation 相依不可成環(自我參照除外)
 - seed 的鍵必須是已宣告欄位;seed 只灌新建表(重用既有表時跳過)
 - 安裝相容判定:模板需求欄位 ⊆ 租戶既有同名表欄位且型別一致 → 重用;否則衝突報告
+- **表 key 不得撞平台保留母體**(AI GO `identifiers.reserved_physical_table_names`:
+  SQL 保留字 ∪ ERP per-tenant 表名 ∪ 平台地板表 `users`/`tenants` 等 76 張)——
+  建表當下 409,且地板表撞名不吃「待允許一鍵補救」管道。S6 以
+  `config/reserved_table_names.json` 快照前置攔截(快照落後時由安裝當下 409 兜底)
 
 ## 新舊制 API 對照(改寫 action 用)
 
